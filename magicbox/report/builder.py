@@ -1,0 +1,222 @@
+"""Erzeugt den Bericht als Markdown, HTML (eigenständig, schön) und JSON."""
+
+from __future__ import annotations
+
+import datetime as dt
+import html
+import json
+import re
+from dataclasses import dataclass
+from pathlib import Path
+
+from magicbox import __version__
+from magicbox.analyzers.base import human_size
+from magicbox.model import AnalysisResult, Section
+
+try:
+    import markdown as md_lib
+    from markdown.extensions import Extension
+    from markdown.treeprocessors import Treeprocessor
+except ImportError:  # pragma: no cover
+    md_lib = None
+
+SEV_ICON = {"high": "🔴", "medium": "🟠", "low": "🟡", "info": "🔵"}
+SEV_NAME = {"high": "hoch", "medium": "mittel", "low": "niedrig", "info": "Info"}
+SEV_ORDER = {"high": 0, "medium": 1, "low": 2, "info": 3}
+MAX_CODE_LINES = 400
+
+
+@dataclass
+class ReportFiles:
+    folder: Path
+    markdown: Path
+    html: Path
+    json: Path
+
+
+def _cell(value: str) -> str:
+    return str(value).replace("|", "\\|").replace("\n", " ")
+
+
+def _section_md(sec: Section, level: int) -> str:
+    h = "#" * level
+    out = [f"{h} {sec.title}", ""]
+    if sec.kv:
+        out += ["| Merkmal | Wert |", "|---|---|"]
+        out += [f"| {_cell(k)} | {_cell(v)} |" for k, v in sec.kv.items()]
+        out.append("")
+    if sec.table:
+        out.append("| " + " | ".join(_cell(x) for x in sec.table.headers) + " |")
+        out.append("|" + "---|" * len(sec.table.headers))
+        out += ["| " + " | ".join(_cell(x) for x in row) + " |" for row in sec.table.rows]
+        if sec.table.total and sec.table.total > len(sec.table.rows):
+            out.append(f"\n*… {sec.table.total - len(sec.table.rows)} weitere Einträge nicht dargestellt.*")
+        out.append("")
+    if sec.text:
+        out += [sec.text, ""]
+    if sec.code:
+        lines = sec.code.splitlines()
+        code = "\n".join(lines[:MAX_CODE_LINES]).replace("```", "``\u200b`")
+        out += [f"```{sec.code_lang}", code, "```"]
+        if len(lines) > MAX_CODE_LINES:
+            out.append(f"*… {len(lines) - MAX_CODE_LINES} weitere Zeilen (vollständig in analysis.json).*")
+        out.append("")
+    return "\n".join(out)
+
+
+def _all_findings(result: AnalysisResult):
+    for r in result.walk():
+        for f in r.findings:
+            yield r, f
+
+
+def rule_based_summary(result: AnalysisResult) -> str:
+    """Kurzfassung ohne KI – aus den Fakten abgeleitet."""
+    lines = [f"**{result.name}** ist ein(e) **{result.description}** mit {human_size(result.size)}."]
+    caps = [s for s in result.sections if s.title.startswith("Abgeleitete Fähigkeiten")]
+    if caps and caps[0].table:
+        lines.append("Erkennbare Fähigkeiten: " + ", ".join(r[0] for r in caps[0].table.rows) + ".")
+    if result.children:
+        kinds: dict[str, int] = {}
+        for c in result.walk():
+            if c is not result:
+                kinds[c.description] = kinds.get(c.description, 0) + 1
+        top = sorted(kinds.items(), key=lambda kv: -kv[1])[:6]
+        lines.append(f"Enthält {sum(kinds.values())} Dateien, u. a.: " + ", ".join(f"{n}× {d}" for d, n in top) + ".")
+    counts = {sev: 0 for sev in SEV_ORDER}
+    for _, f in _all_findings(result):
+        counts[f.severity] += 1
+    if counts["high"]:
+        verdict = "🔴 **Gefährliche Merkmale gefunden** – genauer prüfen, nur in isolierter Umgebung ausführen."
+    elif counts["medium"]:
+        verdict = "🟠 **Auffällig** – einige Merkmale sollten geprüft werden."
+    else:
+        verdict = "🟢 **Keine kritischen Auffälligkeiten** in der statischen Analyse."
+    lines.append(verdict + f" ({counts['high']} hoch, {counts['medium']} mittel, {counts['low']} niedrig)")
+    return "\n\n".join(lines)
+
+
+def build_markdown(result: AnalysisResult, llm_error: str = "") -> str:
+    now = dt.datetime.now().strftime("%d.%m.%Y %H:%M")
+    out = [f"# Analysebericht: {result.name}", "",
+           f"*Erstellt mit Magic Box {__version__} am {now}"
+           + (f" · KI-Modell: {result.llm_model}" if result.llm_model else " · ohne KI") + "*", ""]
+    if result.hashes:
+        out.append(f"`SHA-256: {result.hashes.get('sha256', '')}`\n")
+
+    out += ["## Auf einen Blick", "", rule_based_summary(result), ""]
+
+    if result.llm_doc:
+        doc = result.llm_doc.strip()
+        # Überschriften des Modells eine Ebene tiefer hängen, falls es mit "# " beginnt
+        if re.search(r"^# ", doc, re.M):
+            doc = re.sub(r"^(#+) ", r"#\1 ", doc, flags=re.M)
+        out += ["---", "", doc, "",
+                "> ℹ️ Dieser Teil wurde von einem KI-Modell aus den statischen Analysedaten formuliert. "
+                "Aussagen mit „vermutlich“ sind Interpretationen – die Fakten stehen im technischen Anhang.", ""]
+    elif llm_error:
+        out += [f"> ⚠️ KI-Dokumentation nicht verfügbar: {llm_error}", ""]
+
+    findings = sorted(_all_findings(result), key=lambda rf: SEV_ORDER[rf[1].severity])
+    if findings:
+        out += ["## Auffälligkeiten", "", "| Stufe | Datei | Befund | Details |", "|---|---|---|---|"]
+        for r, f in findings:
+            out.append(f"| {SEV_ICON[f.severity]} {SEV_NAME[f.severity]} | {_cell(r.name)} | {_cell(f.title)} | {_cell(f.detail)} |")
+        out.append("")
+
+    out += ["---", "", "## Technischer Anhang", ""]
+    out += _result_md(result, 3)
+    return "\n".join(out)
+
+
+def _result_md(result: AnalysisResult, level: int) -> list[str]:
+    out = []
+    for sec in result.sections:
+        out.append(_section_md(sec, level))
+    if result.tools:
+        out.append(f"*Verwendete Werkzeuge: {', '.join(dict.fromkeys(result.tools))}*\n")
+    if result.errors:
+        out += [f"{'#' * level} Hinweise zur Analyse", ""] + [f"- {e}" for e in result.errors] + [""]
+    for child in result.children:
+        out += [f"{'#' * min(level, 6)} 📄 {child.name}", "", f"*{child.description}*", ""]
+        if child.llm_doc:
+            out += ["**KI-Einschätzung:**", "", child.llm_doc, ""]
+        out += _result_md(child, min(level + 1, 6))
+    return out
+
+
+# --------------------------------------------------------------------------- HTML
+
+SAFE_SCHEMES = ("http://", "https://", "mailto:", "#")
+
+if md_lib is not None:
+    class _SanitizeLinks(Treeprocessor):
+        def run(self, root):
+            for el in root.iter():
+                if el.tag == "a" and not el.get("href", "").strip().lower().startswith(SAFE_SCHEMES):
+                    el.attrib.pop("href", None)
+                elif el.tag == "img":  # keine (Remote-)Bilder laden
+                    el.tag, el.text = "span", f"[Bild: {el.get('alt', '')}]"
+                    el.attrib.clear()
+
+    class NoRawHtml(Extension):
+        """Analysierte Dateien und LLM-Ausgaben sind nicht vertrauenswürdig: kein rohes HTML durchreichen."""
+
+        def extendMarkdown(self, md):
+            md.preprocessors.deregister("html_block")
+            md.inlinePatterns.deregister("html")
+            md.treeprocessors.register(_SanitizeLinks(md), "sanitize_links", 0)
+
+
+def markdown_to_html(text: str) -> str:
+    if md_lib is None:
+        return f"<pre>{html.escape(text)}</pre>"
+    return md_lib.markdown(text, extensions=["tables", "fenced_code", "sane_lists", "toc", NoRawHtml()],
+                           extension_configs={"toc": {"permalink": False}})
+
+
+def build_html(markdown_text: str, title: str) -> str:
+    css = (Path(__file__).with_name("style.css")).read_text(encoding="utf-8")
+    body = markdown_to_html(markdown_text)
+    return (
+        "<!doctype html>\n<html lang=\"de\"><head><meta charset=\"utf-8\">"
+        "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+        "<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; style-src 'unsafe-inline'; img-src data:\">"
+        f"<title>{html.escape(title)}</title><style>{css}</style></head>"
+        f"<body><main class=\"doc\">{body}</main></body></html>"
+    )
+
+
+def build_qt_html(markdown_text: str) -> str:
+    """Vereinfachtes HTML für die Vorschau in Qt (QTextBrowser kann nur einfaches CSS)."""
+    body = markdown_to_html(markdown_text)
+    style = (
+        "body{font-family:'Segoe UI','Noto Sans',sans-serif;font-size:10.5pt;}"
+        "h1{font-size:20pt;color:#4c1d95;} h2{font-size:15pt;color:#5b21b6;margin-top:18px;}"
+        "h3{font-size:12.5pt;color:#6d28d9;} h4{font-size:11pt;}"
+        "table{border-collapse:collapse;margin:6px 0;} th{background:#ede9fe;}"
+        "td,th{border:1px solid #c4b5fd;padding:3px 6px;}"
+        "pre{background:#f5f3ff;padding:8px;font-family:Consolas,'DejaVu Sans Mono',monospace;font-size:9pt;}"
+        "code{font-family:Consolas,'DejaVu Sans Mono',monospace;background:#f5f3ff;}"
+        "blockquote{color:#555;margin-left:10px;}"
+    )
+    return f"<html><head><style>{style}</style></head><body>{body}</body></html>"
+
+
+# --------------------------------------------------------------------------- Ausgabe
+
+def safe_name(name: str) -> str:
+    cleaned = re.sub(r"[^\w.-]+", "_", name).strip("._") or "datei"
+    return cleaned[:60]
+
+
+def write_report(result: AnalysisResult, out_dir: Path, llm_error: str = "") -> ReportFiles:
+    stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+    folder = Path(out_dir).expanduser() / f"{safe_name(result.name)}_{stamp}"
+    folder.mkdir(parents=True, exist_ok=True)
+    md_text = build_markdown(result, llm_error)
+    files = ReportFiles(folder, folder / "bericht.md", folder / "bericht.html", folder / "analysis.json")
+    files.markdown.write_text(md_text, encoding="utf-8")
+    files.html.write_text(build_html(md_text, f"Analyse: {result.name}"), encoding="utf-8")
+    files.json.write_text(json.dumps(result.to_dict(), indent=1, ensure_ascii=False), encoding="utf-8")
+    return files
