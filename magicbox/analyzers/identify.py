@@ -84,6 +84,8 @@ def detect(data: bytes, name: str) -> tuple[str, str]:
         return "7z", "7-Zip-Archiv"
     if head[:4] == b"Rar!":
         return "rar", "RAR-Archiv"
+    if head[:5] == b"{\\rtf" or head[:4] == b"{\\rt":
+        return "rtf", "RTF-Dokument"
     if head[:5] == b"%PDF-":
         return "pdf", "PDF-Dokument"
     if head[:8] == b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1":

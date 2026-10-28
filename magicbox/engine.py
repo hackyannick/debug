@@ -29,6 +29,7 @@ class Engine:
         self.is_cancelled = is_cancelled or (lambda: False)
         self._identify = IdentifyAnalyzer()
         self._count = 0
+        self.shared: dict = {}
 
     def analyze_path(self, path: Path) -> AnalysisResult:
         path = Path(path)
@@ -51,7 +52,7 @@ class Engine:
         self.log(f"Analysiere {display} ({len(data):,} Bytes)".replace(",", "."))
         path = path or Path(name)
         result = AnalysisResult(path=str(path), name=name, size=len(data))
-        ctx = Context(path=path, data=data, settings=self.settings, depth=depth)
+        ctx = Context(path=path, data=data, settings=self.settings, depth=depth, shared=self.shared)
         ctx.recurse = lambda child_name, child_data: self._child(child_name, child_data, depth + 1)
 
         self._identify.analyze(ctx, result)

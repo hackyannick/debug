@@ -1,204 +1,151 @@
 # 🪄📦 Magic Box
 
-**Datei rein – verständliche Doku raus.**
+**Datei rein – verständliche Doku raus. Komplett lokal, auch komplett offline.**
 
-Magic Box ist eine Desktop-Anwendung, die Dateien automatisiert **statisch** auseinandernimmt (Reverse Engineering),
-die Ergebnisse an ein **lokales LLM** (z. B. Ollama auf deinem Dell PowerEdge R640) schickt und daraus eine
-gut lesbare **Dokumentation** erzeugt – als HTML, Markdown und JSON.
+Magic Box nimmt Dateien – auch Schadsoftware – **statisch** auseinander (sie werden nie ausgeführt), lässt ein
+**lokales LLM** (z. B. auf deinem PowerEdge R640) daraus eine verständliche Dokumentation schreiben und liefert
+einen Bericht mit Bewertung, IOCs, MITRE ATT&CK und allen Rohdaten. Keine Cloud, keine Ablehnungen, keine Daten,
+die dein Netzwerk verlassen.
 
 ```
- Datei / Ordner ──► Statische Analyse ──► Faktenbasis ──► lokales LLM (R640) ──► Bericht (HTML/MD/JSON)
-                    (wird NIE ausgeführt)   (portioniert für      (optional)          + technischer Anhang
-                                             kleine Modelle)
+ Desktop-App / Browser ──(Upload)──►  Magic-Box-Server (R640, Linux)  ──►  lokales LLM (Ollama, localhost)
+                                       │  entpacken · zerlegen · bewerten
+ Drop-Ordner (Samba) ─────────────────►│  YARA · capa · radare2 · ILSpy · olevba · UPX · 7-Zip
+                                       └─► Bericht (HTML/MD/JSON) + IOCs (CSV)
 ```
 
-## Was wird erkannt und analysiert?
+## Aufbau – wie bei Spotify & Co.
+
+| Teil | Was es ist |
+|---|---|
+| **Server** (`magicbox server`) | Nimmt Proben entgegen, arbeitet sie nacheinander ab, speichert Berichte. Läuft ideal auf dem R640 (Linux) – dort kann eine Windows-Probe nicht versehentlich gestartet werden. |
+| **Web-Oberfläche** | Wird vom Server ausgeliefert. Komplett offline (kein CDN, keine externen Fonts), Hell/Dunkel automatisch. |
+| **Desktop-App** (`magicbox desktop`) | Natives Fenster mit eingebettetem Chromium (Qt WebEngine) um dieselbe Oberfläche. Verbindet sich mit dem R640 – oder startet ohne Konfiguration einen eigenen Server lokal im Hintergrund. |
+| **Drop-Ordner** | Datei in einen (Samba-)Ordner legen → taucht als Auftrag in der Oberfläche auf. |
+| **CLI** | `magicbox analyze probe.exe` für Skripte und Batch-Läufe. |
+
+## Was analysiert wird
 
 | Format | Was Magic Box herausholt |
 |---|---|
-| **Windows PE** (EXE, DLL, SYS) | Header, Compile-Zeit, Subsystem, Schutzmechanismen (ASLR/DEP/CFG), Signatur, Versions-Infos, Sektionen + Entropie, Imports/Exports, Ressourcen, Packer (UPX, Themida, VMProtect …), .NET-Erkennung, Disassembly |
-| **Linux ELF** | Architektur, Interpreter, benötigte Libs, Härtung (PIE/NX/RELRO/Canary/FORTIFY), Symbole, Sektionen, Disassembly der wichtigsten Funktionen mit aufgelösten PLT-Aufrufen (`call puts@plt`) |
-| **macOS Mach-O** (inkl. Universal/Fat) | Architekturen, Dateityp, gelinkte Frameworks, Segmente, Code-Signatur, FairPlay-Verschlüsselung |
-| **Java** `.class` / `.jar` / `.war` | Rekonstruierte Klassenstruktur (Felder, Methoden mit Signaturen), aufgerufene Methoden, String-Konstanten, sicherheitsrelevante APIs |
-| **Android APK** | Inhalt, Berechtigungen (z. B. SMS, Standort), Klassen/DEX |
-| **Archive** ZIP, TAR, GZ, BZ2, XZ, Office (DOCX/XLSX/PPTX) | Rekursiv bis zur eingestellten Tiefe, komplett im Speicher (kein Entpacken auf die Platte), Schutz vor ZIP-Bomben, VBA-Makro-Erkennung |
-| **Quelltext/Skripte** (Python, JS/TS, PowerShell, Bash, C/C++, C#, Go, Rust, PHP, Java …) | Struktur (Klassen/Funktionen), Imports, verdächtige Muster (eval, Base64, kodierte PowerShell, Zugangsdaten im Code, Obfuskation) |
+| **Windows PE** (EXE/DLL/SYS) | Header, Compile-Zeit, Schutzmechanismen, Signatur, Versions-Infos, Sektionen + Entropie, Imports/Exports, Ressourcen, Packer, Disassembly bzw. radare2-Pseudocode |
+| **.NET** | Klassen, Methoden, **String-Literale** (oft die Malware-Konfiguration: C2, Keys), aufgerufene APIs, Obfuskations-Erkennung, **Dekompilierung nach C#** (ILSpy) |
+| **UPX-gepackt** | Wird automatisch entpackt, die entpackte Datei wird zusätzlich analysiert |
+| **Linux ELF / macOS Mach-O** | Architektur, Libs, Härtung, Symbole, Disassembly/Pseudocode mit aufgelösten Aufrufen |
+| **Archive** ZIP, 7z, RAR, TAR, GZ, XZ, BZ2 | Rekursiv; **Passwort-Archive** (`infected` & Co., auch AES) werden automatisch geöffnet; Schutz vor ZIP-Bomben |
+| **Office** (DOC/XLS/DOCM/XLSM …) | **VBA-/XLM-Makros** extrahieren (olevba), AutoOpen & verdächtige Funktionen bewerten |
+| **Skripte** (PowerShell, JS, VBS, Python, Bash, …) | Struktur, verdächtige Muster, **Deobfuskation**: `-EncodedCommand`, Base64-/Hex-Blobs → dekodierte Stufen und eingebettete EXEs werden weiter analysiert |
+| **Java/Android** (CLASS, JAR, APK) | Klassenstruktur, aufgerufene Methoden, Konstanten, Berechtigungen |
 | **PDF** | Aktive Inhalte (JavaScript, OpenAction, Launch, eingebettete Dateien) |
-| **Alles** | Hashes (MD5/SHA-1/SHA-256), Entropie, kategorisierte Strings (URLs, IPs, Pfade, Registry, Befehle, Secrets) |
+| **Alles** | Hashes, Entropie, Strings, **YARA** (Basisregeln + eigene/Community-Regeln), **capa** (Fähigkeiten + MITRE ATT&CK), **IOCs** (URLs, Domains, IPs, E-Mails, Registry, Pfade, Wallets) |
 
-Optional nutzt Magic Box **radare2** (falls installiert) für Funktionserkennung und **Pseudo-C-Code**,
-der dem LLM deutlich besser hilft als reines Assembly.
+## Der Bericht
 
-Aus Imports/APIs werden außerdem **Fähigkeiten** abgeleitet (Netzwerk, Prozesse starten, Code-Injektion,
-Registry, Autostart, Krypto …) und als Auffälligkeiten mit Ampel bewertet.
+1. **Auf einen Blick** – Ampel, YARA-Treffer, erkannte Fähigkeiten (funktioniert auch ohne KI)
+2. **KI-Dokumentation** (Profil *Malware*): Einstufung · Verhalten · Infektionskette · Kommunikation/Exfiltration ·
+   Persistenz & Tarnung · IOCs · MITRE ATT&CK · Erkennung & Gegenmaßnahmen · offene Fragen · Glossar
+   (Profil *Software*: Funktionsweise, Aufbau, Schnittstellen usw.)
+3. **Auffälligkeiten** aller (auch verschachtelter/entpackter) Dateien
+4. **IOCs** – entschärft (`hxxp://evil[.]com`) plus `iocs.csv` zum Import in Firewall/SIEM
+5. **Technischer Anhang** – alle Rohdaten
 
 ## Schnellstart
 
-### 1. LLM auf dem R640 einrichten
-
-Siehe **[docs/R640-LLM-Setup.md](docs/R640-LLM-Setup.md)** – kurz:
+### Server auf dem R640 (empfohlen)
 
 ```bash
-curl -fsSL https://ollama.com/install.sh | sh
+git clone <dieses-repo> magicbox && cd magicbox
 ```
 
 ```bash
-sudo systemctl edit ollama.service   # OLLAMA_HOST=0.0.0.0:11434 setzen (siehe Anleitung)
+sudo ./scripts/install_server.sh --model qwen3-coder:30b
 ```
+
+Das Skript installiert alles (Werkzeuge, capa-Regeln, YARA-Forge-Regeln, ILSpy, Ollama + Modell), richtet den
+gesperrten systemd-Dienst ein und zeigt am Ende die URL mit Zugangsschlüssel. Ollama bleibt dabei auf `localhost`
+– nur die Magic Box (Port 8765) ist im LAN erreichbar.
+
+**Ganz ohne Internet?** Auf einem Online-Rechner `./scripts/make_offline_bundle.sh` ausführen, das Paket
+rüberkopieren und `install_server.sh --offline` nutzen. Details: [docs/R640-LLM-Setup.md](docs/R640-LLM-Setup.md).
+
+### Desktop-App
+
+**Windows:** Doppelklick auf `scripts\start_windows.bat` · **Linux/macOS:** `./scripts/start_linux.sh`
+
+Dann im Menü **Magic Box → Server wechseln …** die Adresse des R640 eintragen (z. B. `http://r640:8765`) oder direkt:
 
 ```bash
-ollama pull qwen2.5-coder:7b
+magicbox desktop --server http://192.168.1.50:8765
 ```
 
-### 2. Magic Box auf dem Desktop starten
+Ohne Server-Adresse startet die App einen eigenen Server lokal (praktisch zum Ausprobieren).
 
-Voraussetzung: Python ≥ 3.10.
+### Nur im Browser
 
-**Windows:** Doppelklick auf `scripts\start_windows.bat`
+`http://<r640>:8765/?token=<schlüssel>` öffnen – fertig.
 
-**Linux/macOS:**
+## Werkzeuge
 
-```bash
-./scripts/start_linux.sh
-```
+Alle externen Werkzeuge sind optional – fehlt eins, wird der Schritt übersprungen. Den Status zeigt die
+Oberfläche oben unter **🧰 Werkzeuge**.
 
-Oder manuell:
-
-```bash
-python3 -m venv .venv && . .venv/bin/activate && pip install -e '.[gui]'
-```
-
-```bash
-magicbox gui
-```
-
-Beim ersten Start unter **⚙️ Einstellungen** die Server-URL eintragen (z. B. `http://r640:11434` oder
-`http://192.168.1.50:11434`), **Modelle laden** klicken, Modell wählen, **Verbindung testen**.
-
-### 3. Datei reinwerfen
-
-Datei oder Ordner auf die Box ziehen → im Tab **🤖 KI live** schreibt das Modell mit → danach erscheint die
-Doku im Tab **📖 Dokumentation**. „🌐 Im Browser öffnen“ zeigt den schön formatierten HTML-Bericht (mit Dark Mode).
-
-Ohne erreichbaren LLM-Server entsteht trotzdem ein Bericht – dann mit automatischer Kurzfassung und
-technischem Anhang, aber ohne KI-Text.
-
-## Aufbau des Berichts
-
-1. **Auf einen Blick** – regelbasierte Kurzfassung mit Ampel (funktioniert auch ohne KI)
-2. **KI-Dokumentation** – Kurzfassung · Was ist das? · Was macht es? · Aufbau & Komponenten ·
-   Schnittstellen · Sicherheitsbewertung · Offene Fragen · Glossar
-3. **Auffälligkeiten** – alle Befunde aller (auch verschachtelter) Dateien, nach Schwere sortiert
-4. **Technischer Anhang** – alle Rohdaten: Header, Tabellen, Strings, Disassembly/Pseudocode, Inhalte von Archiven
-
-Gespeichert wird in `~/MagicBox/Berichte/<datei>_<zeitstempel>/` (`bericht.html`, `bericht.md`, `analysis.json`).
-
-## Kommandozeile & „Magic-Box-Ordner“ auf dem Server
-
-```bash
-magicbox analyze verdaechtig.exe --url http://r640:11434 --model qwen2.5-coder:7b --open
-```
-
-```bash
-magicbox analyze firmware.zip --no-llm          # nur technische Analyse
-```
-
-```bash
-magicbox check --url http://r640:11434          # Verbindung + Modell prüfen
-```
-
-**Drop-Folder-Modus** – ideal direkt auf dem R640 mit einer Samba-Freigabe: Datei in den Ordner kopieren,
-kurz darauf liegt der Bericht in `_berichte/`, das Original wird nach `_erledigt/` verschoben.
-
-```bash
-magicbox watch /srv/magicbox/eingang --url http://127.0.0.1:11434
-```
-
-Ein passender systemd-Dienst liegt unter [`scripts/magicbox-watch.service`](scripts/magicbox-watch.service).
-
-## Wie kleine Modelle trotzdem gute Dokus schreiben
-
-Kleine lokale Modelle (7–14 B Parameter) haben wenig Kontext und neigen zum Fantasieren. Magic Box hilft ihnen:
-
-- **Fakten statt Rohdaten:** Das Modell bekommt eine verdichtete, priorisierte Faktenbasis
-  (Header, Fähigkeiten, Imports, Auffälligkeiten zuerst – Strings und Code nach Platz).
-- **Map-Reduce:** Ist der Code zu groß, wird er in Teile zerlegt; jeder Teil wird einzeln zusammengefasst,
-  danach entsteht aus allen Notizen die Gesamtdoku. Bei Archiven/Ordnern bekommt jede interessante Datei
-  eine eigene Kurzanalyse.
-- **Korrekte Kontextgröße:** `num_ctx` wird explizit an Ollama übergeben (Ollamas Standard ist klein und
-  schneidet sonst still ab).
-- **Strenge Regeln im Prompt:** nur belegte Fakten, Vermutungen kennzeichnen, feste Gliederung.
-- `<think>`-Blöcke von Reasoning-Modellen (z. B. Qwen3) werden automatisch entfernt.
-
-Alle Parameter (Kontextgröße, Temperatur, Sprache, Zielgruppe, Anzahl Teilanalysen) sind in den Einstellungen
-anpassbar. Die Zielgruppe lässt sich z. B. auf „für Sicherheitsanalysten“ oder „für das Management“ umstellen.
+| Werkzeug | Wofür | Installation |
+|---|---|---|
+| radare2 | Funktionserkennung, Pseudocode | `apt install radare2` |
+| UPX | Entpacken | `apt install upx-ucl` |
+| 7-Zip | 7z/RAR, AES-ZIPs | `apt install p7zip-full` |
+| capa + Regeln | Fähigkeiten, MITRE ATT&CK | `pip install flare-capa` + [capa-rules](https://github.com/mandiant/capa-rules) (macht das Installationsskript) |
+| YARA | Familien-/Verhaltenserkennung | `pip install yara-python`; Regeln z. B. von [YARA-Forge](https://github.com/YARAHQ/yara-forge) |
+| ILSpy (ilspycmd) | .NET → C# | `dotnet tool install -g ilspycmd --version 8.2.0.7535` |
+| oletools, dnfile, pyzipper | Makros, .NET-Metadaten, AES-ZIP | `pip install -e '.[malware]'` |
 
 ## Sicherheit
 
-- Dateien werden **nie ausgeführt** – alles ist statische Analyse. Archive werden im Speicher gelesen.
-- Trotzdem gilt bei Malware: Analyse am besten in einer **isolierten VM**, Berichte enthalten u. a.
-  URLs/IPs aus der Probe.
-- Der HTML-Bericht ist gegen eingeschleustes HTML/JavaScript abgesichert (kein rohes HTML aus Probe oder
-  KI-Antwort, Content-Security-Policy, keine externen Bilder/Links mit `javascript:`).
-- Daten verlassen dein Netzwerk nicht, solange der LLM-Server lokal ist.
-- Bitte nur Software analysieren, für die du die Berechtigung hast (eigene Software, Interoperabilität,
-  Sicherheitsforschung im rechtlichen Rahmen).
+- **Nie ausgeführt:** alles ist statische Analyse. Proben werden ohne Ausführungsrechte gespeichert und nie
+  wieder ausgeliefert (nur Berichte).
+- **Server-Härtung:** systemd-Sandbox (read-only System, kein Home, eigene /tmp), Zugangsschlüssel,
+  CSRF-Schutz, Schutz vor DNS-Rebinding, Content-Security-Policy.
+- **Berichte sind sicher zu öffnen:** kein HTML/JavaScript aus Probe oder KI-Antwort, IOCs entschärft,
+  Bericht in einem abgeschotteten iframe.
+- **Netz:** Ollama nur auf localhost; für echten Offline-Betrieb ausgehenden Verkehr am Server sperren.
+- Empfehlung: Server als eigene VM ohne Internetzugang. Nur Dateien analysieren, für die du berechtigt bist.
 
-## Erweitern
+## Kommandozeile
 
-Ein neuer Analyzer ist eine kleine Klasse in `magicbox/analyzers/`:
-
-```python
-class MeinAnalyzer(Analyzer):
-    name = "mein"
-    kinds = ("pe",)            # für welche Dateitypen
-
-    def analyze(self, ctx, result):
-        result.add(Section("Meine Erkenntnis", kv={"Wert": "42"}, llm_priority=1))
-        result.find("medium", "Etwas Auffälliges", "Details …")
+```bash
+magicbox server --host 0.0.0.0 --watch /srv/magicbox/eingang     # Server + Drop-Ordner
+magicbox desktop [--server URL]                                  # Desktop-App
+magicbox analyze probe.exe --open                                # einzelne Datei, Bericht im Browser
+magicbox analyze probe.zip --no-llm                              # nur technische Analyse
+magicbox check --url http://127.0.0.1:11434 --model qwen3-coder:30b
 ```
-
-…und in `magicbox/analyzers/__init__.py` in `ANALYZERS` eintragen. Alles Weitere (Bericht, LLM-Kontext) passiert
-automatisch.
-
-Ideen für später: Ghidra-Headless-Dekompilierung, .NET-Dekompilierung (ILSpy-CLI), YARA-Regeln,
-`.pyc`-Dekompilierung, Batch-Vergleich zweier Versionen (Diff-Doku).
 
 ## Entwicklung
 
 ```bash
-pip install -e '.[gui,dev]'
+pip install -e '.[desktop,malware,dev]'
 ```
 
 ```bash
 pytest
 ```
 
-Die Tests brauchen keinen echten LLM-Server (ein Fake-Server spricht das Ollama- und OpenAI-Protokoll) und
-erzeugen ihre Testdateien selbst.
+Die Tests brauchen kein echtes LLM (ein Fake-Server spricht Ollama- und OpenAI-Protokoll) und erzeugen ihre
+Testdateien selbst; Tests für externe Werkzeuge (upx, 7z, dotnet, gcc, radare2) werden übersprungen, wenn diese fehlen.
 
-Eigenständige `.exe` bauen (optional, unter Windows):
-
-```bash
-pip install pyinstaller
-```
-
-```bash
-pyinstaller --noconsole --name MagicBox --collect-data magicbox -p . magicbox/gui/app.py
-```
-
-## Projektstruktur
+Neuer Analyzer: Klasse in `magicbox/analyzers/` (siehe vorhandene), in `analyzers/__init__.py` eintragen – Bericht,
+IOCs und LLM-Kontext entstehen automatisch.
 
 ```
 magicbox/
-├── analyzers/      # identify, strings, pe, elf, macho, java, archive, source(+pdf), radare2, disasm, apis
-├── llm/            # client (Ollama/OpenAI-kompatibel), prompts, documenter (Map-Reduce)
-├── report/         # Markdown/HTML/JSON-Bericht + style.css
-├── gui/            # PySide6-Oberfläche (Drop-Zone, Aufträge, Live-KI, Einstellungen)
-├── engine.py       # rekursive Analyse-Engine
-├── pipeline.py     # Datei → Analyse → LLM → Bericht
-└── cli.py          # analyze | watch | check | models | gui
-docs/R640-LLM-Setup.md
-scripts/            # Startskripte, systemd-Dienst
-tests/
+├── analyzers/   identify · strings · pe · dotnet(+Makros) · elf · macho · java · archive · source(+pdf)
+│                deobfuscate · iocs · yara_scan · capa · unpack · radare2 · disasm · apis
+├── yara_rules/  mitgelieferte Basisregeln
+├── llm/         Client (Ollama/OpenAI-kompatibel), Prompts (Profile), Map-Reduce-Dokumentierer
+├── report/      Bericht (HTML/MD/JSON/CSV)
+├── server/      HTTP-API, Live-Ereignisse, Auftragsverwaltung, Drop-Ordner
+├── web/         Oberfläche (HTML/CSS/JS, ohne Abhängigkeiten)
+├── gui/         Desktop-App (Qt WebEngine)
+├── engine.py · pipeline.py · tools.py · cli.py
+scripts/         install_server.sh · make_offline_bundle.sh · magicbox-server.service · Startskripte
 ```

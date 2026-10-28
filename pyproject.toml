@@ -17,20 +17,25 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-gui = ["PySide6>=6.6"]
+# Malware-Suite: YARA, Office-Makros, .NET-Metadaten, AES-ZIPs
+malware = ["yara-python>=4.3", "oletools>=0.60", "dnfile>=0.15", "pyzipper>=0.3.6"]
+# Desktop-App (natives Fenster mit eingebettetem Chromium)
+desktop = ["PySide6>=6.6"]
+# capa als Python-Paket (alternativ die Standalone-Binary von Mandiant nutzen)
+capa = ["flare-capa>=7"]
 dev = ["pytest>=7"]
 
 [project.scripts]
 magicbox = "magicbox.cli:main"
 
 [project.gui-scripts]
-magicbox-gui = "magicbox.gui.app:main"
+magicbox-desktop = "magicbox.gui.app:main"
 
 [tool.setuptools.packages.find]
 include = ["magicbox*"]
 
 [tool.setuptools.package-data]
-magicbox = ["report/*.css"]
+magicbox = ["report/*.css", "web/*", "yara_rules/*.yar"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

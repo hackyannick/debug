@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Magic Box</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%AA%84%3C/text%3E%3C/svg%3E">
+<link rel="stylesheet" href="/static/app.css">
+<script src="/static/app.js" defer></script>
+</head>
+<body>
+<header class="topbar">
+  <div class="brand"><span class="logo">🪄</span><span>Magic Box</span><span class="version" id="version"></span></div>
+  <div class="pills">
+    <button class="pill" id="pill-llm" title="KI-Server"><span class="dot"></span><span class="label">KI …</span></button>
+    <button class="pill" id="pill-tools" title="Analyse-Werkzeuge"><span class="label">Werkzeuge …</span></button>
+  </div>
+  <button class="btn ghost" id="btn-settings">⚙️ Einstellungen</button>
+</header>
+
+<div class="layout">
+  <aside class="sidebar">
+    <label class="drop" id="drop" tabindex="0">
+      <input type="file" id="file-input" multiple hidden>
+      <span class="drop-icon">📦</span>
+      <span class="drop-title">Datei hier reinwerfen</span>
+      <span class="drop-hint">oder klicken · EXE, DLL, ELF, APK, JAR, ZIP/7z (auch mit Passwort), Office, PDF, Skripte</span>
+    </label>
+    <div class="upload-opts">
+      <label>Profil
+        <select id="opt-profile">
+          <option value="malware">🛡️ Malware</option>
+          <option value="allgemein">📘 Software</option>
+        </select>
+      </label>
+      <label>Archiv-Passwort
+        <input id="opt-password" type="text" placeholder="z. B. infected" autocomplete="off" spellcheck="false">
+      </label>
+    </div>
+    <div id="uploads"></div>
+    <div class="jobs-head"><span>Aufträge</span><span class="count" id="job-count"></span></div>
+    <ul class="jobs" id="jobs"></ul>
+  </aside>
+
+  <main class="main" id="main">
+    <section class="empty" id="empty">
+      <h1>Datei rein – Doku raus.</h1>
+      <p>Die Magic Box nimmt Dateien <strong>statisch</strong> auseinander – sie werden nie ausgeführt – und lässt
+        dein lokales Sprachmodell daraus eine verständliche Dokumentation schreiben. Nichts verlässt dein Netzwerk.</p>
+      <ol class="steps">
+        <li><b>Erkennen &amp; entpacken</b><span>Dateityp, Passwort-Archive, UPX, kodierte Skript-Stufen</span></li>
+        <li><b>Zerlegen</b><span>Header, Imports, Strings, Disassembly/Pseudocode, .NET-Dekompilierung, Makros</span></li>
+        <li><b>Bewerten</b><span>YARA, capa/MITRE ATT&amp;CK, Fähigkeiten, IOCs</span></li>
+        <li><b>Dokumentieren</b><span>Lokales LLM schreibt Bericht, Rohdaten im Anhang</span></li>
+      </ol>
+    </section>
+
+    <section class="job hidden" id="job">
+      <div class="job-head">
+        <div class="job-title">
+          <h1 id="job-name"></h1>
+          <div class="job-meta" id="job-meta"></div>
+          <div class="chips" id="job-chips"></div>
+        </div>
+        <div class="actions">
+          <a class="btn primary" id="act-open" target="_blank" rel="noopener">Bericht öffnen ↗</a>
+          <div class="menu">
+            <button class="btn" id="act-download">⬇ Downloads</button>
+            <div class="menu-list hidden" id="download-list">
+              <a id="dl-md" download>Bericht (Markdown)</a>
+              <a id="dl-json" download>Rohdaten (JSON)</a>
+              <a id="dl-iocs" download>IOCs (CSV)</a>
+            </div>
+          </div>
+          <button class="btn" id="act-rerun" title="Erneut analysieren (z. B. mit anderem Modell)">↻ Neu</button>
+          <button class="btn danger" id="act-cancel">⛔ Abbrechen</button>
+          <button class="btn ghost danger-text" id="act-delete" title="Auftrag inkl. Probe löschen">🗑</button>
+        </div>
+      </div>
+      <div class="progress hidden" id="job-progress"><div class="bar" id="job-bar"></div><span id="job-stage"></span></div>
+      <nav class="tabs" role="tablist">
+        <button class="tab active" data-tab="report">📖 Bericht</button>
+        <button class="tab" data-tab="ai">🤖 KI live</button>
+        <button class="tab" data-tab="log">🧾 Protokoll</button>
+      </nav>
+      <div class="panels">
+        <div class="panel active" data-panel="report">
+          <iframe id="report-frame" sandbox title="Bericht"></iframe>
+          <div class="placeholder hidden" id="report-placeholder"></div>
+        </div>
+        <div class="panel" data-panel="ai"><pre id="ai-text" class="mono"></pre></div>
+        <div class="panel" data-panel="log"><pre id="log-text" class="mono"></pre></div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<dialog id="dlg-settings" class="dialog">
+  <form method="dialog" id="settings-form">
+    <h2>Einstellungen</h2>
+    <fieldset>
+      <legend>KI-Server</legend>
+      <label class="check"><input type="checkbox" name="use_llm"> KI-Dokumentation erzeugen</label>
+      <div class="grid2">
+        <label>Schnittstelle
+          <select name="provider"><option value="ollama">Ollama</option><option value="openai">OpenAI-kompatibel (llama.cpp, vLLM …)</option></select>
+        </label>
+        <label>Server-URL<input name="base_url" placeholder="http://127.0.0.1:11434"></label>
+        <label>Modell
+          <span class="row"><input name="model" list="model-list" placeholder="qwen3-coder:30b"><button type="button" class="btn small" id="btn-models">Laden</button></span>
+          <datalist id="model-list"></datalist>
+        </label>
+        <label>API-Key<input name="api_key" type="password" placeholder="optional" autocomplete="off"></label>
+        <label>Kontextgröße (Tokens)<input name="context_tokens" type="number" min="2048" step="1024"></label>
+        <label>Temperatur<input name="temperature" type="number" min="0" max="1.5" step="0.1"></label>
+        <label>Sprache<input name="language"></label>
+        <label>Zielgruppe
+          <select name="audience">
+            <option>verständlich für technisch interessierte Laien</option>
+            <option>für Sicherheitsanalysten (Malware-/Incident-Response-Fokus)</option>
+            <option>für erfahrene Entwickler, technisch präzise</option>
+            <option>für das Management: knapp, ohne Fachjargon</option>
+          </select>
+        </label>
+        <label>Standard-Profil
+          <select name="profile"><option value="malware">Malware-Analyse</option><option value="allgemein">Software-Doku</option></select>
+        </label>
+        <label>Max. KI-Teilanalysen<input name="max_llm_children" type="number" min="0" max="100"></label>
+      </div>
+      <div class="row"><button type="button" class="btn" id="btn-check">🔌 Verbindung testen</button><span id="check-result" class="muted"></span></div>
+    </fieldset>
+    <fieldset>
+      <legend>Analyse</legend>
+      <div class="grid2">
+        <label>Archiv-Passwörter (eins pro Zeile)<textarea name="archive_passwords" rows="3" spellcheck="false"></textarea></label>
+        <label>Eigene YARA-Regeln (Ordner auf dem Server)<input name="yara_rules_dir" placeholder="/srv/magicbox/yara"></label>
+        <label>Max. Archiv-Tiefe<input name="max_archive_depth" type="number" min="0" max="10"></label>
+        <label>Max. Dateien pro Archiv<input name="max_archive_members" type="number" min="1"></label>
+        <label>Max. Funktionen (Disassembly)<input name="max_disasm_functions" type="number" min="1" max="200"></label>
+        <label>Zeitlimit Werkzeuge (s)<input name="tool_timeout_s" type="number" min="10"></label>
+      </div>
+      <label class="check"><input type="checkbox" name="use_radare2"> radare2 nutzen (Pseudocode)</label>
+      <label class="check"><input type="checkbox" name="use_capa"> capa nutzen (Fähigkeiten + MITRE ATT&amp;CK)</label>
+      <details>
+        <summary>Pfade zu Werkzeugen</summary>
+        <div class="grid2">
+          <label>radare2<input name="radare2_path"></label>
+          <label>capa<input name="capa_path"></label>
+          <label>capa-Regeln (optional)<input name="capa_rules"></label>
+          <label>capa-Zeitlimit (s)<input name="capa_timeout_s" type="number" min="30"></label>
+          <label>UPX<input name="upx_path"></label>
+          <label>7-Zip<input name="sevenzip_path"></label>
+          <label>ilspycmd<input name="ilspy_path"></label>
+        </div>
+      </details>
+    </fieldset>
+    <div class="dialog-actions">
+      <button type="button" class="btn ghost" value="cancel" id="settings-cancel">Abbrechen</button>
+      <button type="submit" class="btn primary" value="save">Speichern</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="dlg-tools" class="dialog">
+  <h2>Analyse-Werkzeuge</h2>
+  <p class="muted">Fehlende Werkzeuge werden übersprungen – die Analyse läuft trotzdem. Installation siehe Hinweis.</p>
+  <table class="tools-table"><thead><tr><th></th><th>Werkzeug</th><th>Wofür</th><th>Status / Installation</th></tr></thead><tbody id="tools-body"></tbody></table>
+  <div class="dialog-actions"><button class="btn primary" id="tools-close">Schließen</button></div>
+</dialog>
+
+<dialog id="dlg-login" class="dialog small">
+  <form id="login-form">
+    <h2>🔒 Zugang</h2>
+    <p class="muted">Dieser Magic-Box-Server ist mit einem Zugangsschlüssel geschützt.</p>
+    <label>Zugangsschlüssel<input name="token" type="password" autocomplete="current-password" required></label>
+    <div class="dialog-actions"><button class="btn primary" type="submit">Anmelden</button></div>
+  </form>
+</dialog>
+
+<div class="toasts" id="toasts"></div>
+</body>
+</html>

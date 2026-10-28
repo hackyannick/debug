@@ -31,7 +31,7 @@ class Callbacks:
     is_cancelled: Callable[[], bool] = lambda: False
 
 
-def run(path: Path, settings: Settings, cb: Callbacks | None = None) -> JobOutcome:
+def run(path: Path, settings: Settings, cb: Callbacks | None = None, report_folder: Path | None = None) -> JobOutcome:
     cb = cb or Callbacks()
     start = time.monotonic()
     path = Path(path)
@@ -57,7 +57,7 @@ def run(path: Path, settings: Settings, cb: Callbacks | None = None) -> JobOutco
         llm_error = "KI ist in den Einstellungen deaktiviert."
 
     cb.progress(95, "Bericht schreiben")
-    files = write_report(result, Path(settings.output_dir), llm_error if settings.use_llm else "")
+    files = write_report(result, Path(settings.output_dir), llm_error if settings.use_llm else "", folder=report_folder)
     seconds = time.monotonic() - start
     cb.log(f"✔ Bericht gespeichert: {files.html} ({seconds:.0f} s)")
     cb.progress(100, "Fertig")

@@ -61,6 +61,10 @@ class AnalysisResult:
     children: list["AnalysisResult"] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     tools: list[str] = field(default_factory=list)
+    # Indicators of Compromise: Typ -> Werte (URL, Domain, IPv4, E-Mail, Registry, Pfad, Hash …)
+    iocs: dict[str, list[str]] = field(default_factory=dict)
+    # Treffer von Erkennungsregeln (YARA) – Namen von Malware-Familien/Regeln
+    detections: list[str] = field(default_factory=list)
     llm_doc: str = ""
     llm_model: str = ""
 
@@ -70,6 +74,11 @@ class AnalysisResult:
 
     def find(self, severity: str, title: str, detail: str = "") -> None:
         self.findings.append(Finding(severity, title, detail))
+
+    def add_ioc(self, kind: str, value: str) -> None:
+        values = self.iocs.setdefault(kind, [])
+        if value not in values and len(values) < 500:
+            values.append(value)
 
     def walk(self):
         yield self

@@ -37,9 +37,28 @@ def render_section(sec: Section, limit: int) -> str:
     return text
 
 
+def collect_iocs(result: AnalysisResult, per_kind: int = 15) -> dict[str, list[str]]:
+    merged: dict[str, list[str]] = {}
+    for r in result.walk():
+        for kind, values in r.iocs.items():
+            lst = merged.setdefault(kind, [])
+            lst.extend(v for v in values if v not in lst)
+    return {k: v[:per_kind] for k, v in merged.items()}
+
+
 def facts_text(result: AnalysisResult, budget: int, include_code: bool = True) -> str:
     """Kompakte Faktenbasis innerhalb eines Zeichenbudgets (wichtigste Abschnitte zuerst)."""
     head = [f"- Datei: {result.name}", f"- Typ: {result.description}", f"- Größe: {result.size} Bytes"]
+    if result.hashes:
+        head.append(f"- SHA-256: {result.hashes.get('sha256', '')}")
+    detections = sorted({d for r in result.walk() for d in r.detections})
+    if detections:
+        head.append(f"- YARA-Treffer: {', '.join(detections)}")
+    iocs = collect_iocs(result)
+    if iocs:
+        head.append("\n### Extrahierte Indikatoren (IOCs)")
+        for kind, values in iocs.items():
+            head.append(f"- {kind}: {', '.join(values)}")
     if result.findings:
         head.append("\n### Automatisch erkannte Auffälligkeiten")
         order = {"high": 0, "medium": 1, "low": 2, "info": 3}

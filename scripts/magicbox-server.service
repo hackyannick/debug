@@ -1,0 +1,29 @@
+# systemd-Dienst: Magic-Box-Server (Web-Oberfläche + Drop-Ordner) – wird von scripts/install_server.sh eingerichtet.
+[Unit]
+Description=Magic Box – Analyse-Server (Datei rein, Doku raus)
+After=network-online.target ollama.service
+Wants=network-online.target
+
+[Service]
+User=magicbox
+Group=magicbox
+WorkingDirectory=/opt/magicbox
+Environment=XDG_CACHE_HOME=/srv/magicbox/cache
+ExecStart=/opt/magicbox/.venv/bin/magicbox server --host 0.0.0.0 --port 8765 --data /srv/magicbox/daten --watch /srv/magicbox/eingang --config /etc/magicbox/settings.json
+Restart=on-failure
+
+# Proben sind potenziell bösartig: Dienst so weit wie möglich einsperren
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+ReadWritePaths=/srv/magicbox /etc/magicbox /opt/magicbox/.dotnet
+
+[Install]
+WantedBy=multi-user.target

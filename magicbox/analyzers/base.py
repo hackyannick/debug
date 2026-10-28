@@ -19,6 +19,8 @@ class Context:
     depth: int = 0
     # Von Analyzern befüllte Infos für spätere Analyzer (z. B. Architektur, Symbole)
     facts: dict = field(default_factory=dict)
+    # Für alle Dateien eines Auftrags gemeinsam (z. B. Zähler für teure Werkzeuge)
+    shared: dict = field(default_factory=dict)
     # Rekursive Analyse eingebetteter Dateien: recurse(name, data) -> AnalysisResult | None
     recurse: Callable[[str, bytes], AnalysisResult | None] | None = None
 

@@ -5,6 +5,6 @@ if not exist .venv (
     echo Erstelle virtuelle Umgebung ...
     py -3 -m venv .venv || python -m venv .venv
     .venv\Scripts\python -m pip install --upgrade pip
-    .venv\Scripts\python -m pip install -e .[gui]
+    .venv\Scripts\python -m pip install -e .[desktop,malware]
 )
-start "" .venv\Scripts\pythonw -m magicbox gui
+start "" .venv\Scripts\pythonw -m magicbox desktop

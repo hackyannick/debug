@@ -16,10 +16,37 @@ DOC_HEADINGS = [
 ]
 
 
+MALWARE_HEADINGS = [
+    ("Kurzfassung", "Beginne mit 'Einstufung: harmlos | verdächtig | bösartig'. Dann 3–5 Sätze: vermutete Kategorie "
+                    "(z. B. Infostealer, Ransomware, Loader, RAT, Adware), Hauptzweck, Gefährlichkeit. Eine Malware-Familie nur "
+                    "nennen, wenn sie durch YARA-Treffer belegt ist."),
+    ("Verhalten & Fähigkeiten", "Was kann die Datei? Belege jede Aussage (Import, capa-Regel, String, Code-Stelle)."),
+    ("Ablauf / Infektionskette", "Stufen der Ausführung, dekodierte oder entpackte Teile, nachgeladene Payloads."),
+    ("Kommunikation & Exfiltration", "C2-Server, Protokolle, welche Daten vermutlich abfließen."),
+    ("Persistenz & Tarnung", "Autostart, Dienste, Verschleierung, Anti-Analyse – sofern belegt."),
+    ("Indikatoren (IOCs)", "Tabelle Typ | Wert | Bedeutung mit den wichtigsten IOCs. Nur Werte aus den Fakten übernehmen, "
+                           "Punkte als [.] und http als hxxp schreiben."),
+    ("MITRE ATT&CK", "Tabelle ID | Technik | Beleg – nur Techniken, die durch die Fakten gestützt sind."),
+    ("Erkennung & Gegenmaßnahmen", "Wie erkennt man eine Infektion, was blockieren/bereinigen? Konkret und umsetzbar."),
+    ("Offene Fragen & nächste Schritte", "Was blieb statisch unklar (z. B. verschlüsselte Konfiguration)? Empfehlung, "
+                                         "z. B. dynamische Analyse in einer isolierten Sandbox."),
+    ("Glossar", "Kurze, einfache Erklärungen der Fachbegriffe (Tabelle: Begriff | Erklärung)."),
+]
+
+
+def headings(s: Settings) -> list[tuple[str, str]]:
+    return MALWARE_HEADINGS if s.profile == "malware" else DOC_HEADINGS
+
+
 def system_prompt(s: Settings) -> str:
+    purpose = ""
+    if s.profile == "malware":
+        purpose = ("Die Analyse dient der Abwehr (Incident Response, Threat Intelligence, Schutz eigener Systeme). "
+                   "Beschreibe das Verhalten sachlich und vollständig, gib aber keine Anleitungen zur Nutzung, "
+                   "Verbesserung oder Verbreitung der Software.\n")
     return (
         "Du bist ein erfahrener Reverse Engineer und technischer Redakteur. Du bekommst die Ergebnisse "
-        "einer automatisierten, rein statischen Analyse (die Datei wurde nie ausgeführt).\n"
+        "einer automatisierten, rein statischen Analyse (die Datei wurde nie ausgeführt).\n" + purpose +
         "Regeln:\n"
         "1. Stütze dich ausschließlich auf die gelieferten Fakten. Erfinde keine Funktionen, Namen oder Zahlen.\n"
         "2. Kennzeichne Schlussfolgerungen deutlich mit „vermutlich“ oder „deutet darauf hin“.\n"
@@ -41,14 +68,15 @@ def code_notes_prompt(name: str, part: int, total: int, code: str, context: str)
 
 def child_notes_prompt(name: str, facts: str) -> str:
     return (
-        f"Analyse-Fakten zur Datei „{name}“ (Teil eines Archivs/Ordners):\n\n{facts}\n\n"
+        f"Analyse-Fakten zur Datei „{name}“ (Teil eines Archivs, Ordners oder eine entpackte/dekodierte Stufe):\n\n"
+        f"{facts}\n\n"
         "Beschreibe in 3–6 Stichpunkten: Was ist diese Datei, welche Rolle spielt sie vermutlich im Gesamtpaket, "
-        "gibt es sicherheitsrelevante Auffälligkeiten? Keine Einleitung."
+        "gibt es sicherheitsrelevante Auffälligkeiten (mit Beleg)? Keine Einleitung."
     )
 
 
 def document_prompt(name: str, facts: str, notes: str, s: Settings) -> str:
-    outline = "\n".join(f"## {h}\n({hint})" for h, hint in DOC_HEADINGS)
+    outline = "\n".join(f"## {h}\n({hint})" for h, hint in headings(s))
     notes_block = f"\n\n# Zusammenfassungen der Code-Teile bzw. enthaltenen Dateien\n{notes}" if notes else ""
     return (
         f"# Analyse-Fakten zu „{name}“\n{facts}{notes_block}\n\n"

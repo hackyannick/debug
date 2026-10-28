@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import os
 import sys
-from dataclasses import asdict, dataclass, fields
+from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 
 
@@ -21,6 +21,10 @@ def config_dir() -> Path:
 
 def default_output_dir() -> str:
     return str(Path.home() / "MagicBox" / "Berichte")
+
+
+def default_data_dir() -> str:
+    return str(Path.home() / "MagicBox" / "Daten")
 
 
 @dataclass
@@ -40,6 +44,9 @@ class Settings:
     max_llm_children: int = 12  # max. Einzel-Zusammenfassungen bei Archiven/Ordnern
     max_code_chunks: int = 6  # max. Code-Teilstücke, die einzeln vom LLM gelesen werden
 
+    # Berichtsprofil: "malware" (IOCs, ATT&CK, Erkennung) oder "allgemein" (Software-Doku)
+    profile: str = "malware"
+
     # Analyse
     output_dir: str = ""
     max_archive_depth: int = 3
@@ -49,9 +56,33 @@ class Settings:
     use_radare2: bool = True
     radare2_path: str = "r2"
 
+    # Malware-Suite (externe Werkzeuge sind optional – fehlen sie, wird der Schritt übersprungen)
+    archive_passwords: list[str] = field(default_factory=lambda: ["infected", "malware", "virus", "password"])
+    upx_path: str = "upx"
+    sevenzip_path: str = "7z"
+    use_capa: bool = True
+    capa_path: str = "capa"
+    capa_rules: str = ""  # Ordner mit capa-Regeln (bei der Standalone-capa-Binary nicht nötig)
+    capa_timeout_s: int = 900
+    yara_rules_dir: str = ""  # zusätzliche eigene/Community-Regeln; mitgelieferte Regeln laufen immer
+    ilspy_path: str = "ilspycmd"
+    tool_timeout_s: int = 300
+
+    # Server / Web-Oberfläche
+    data_dir: str = ""
+    host: str = "127.0.0.1"
+    port: int = 8765
+    web_token: str = ""  # wenn gesetzt, verlangt die Web-Oberfläche diesen Zugangsschlüssel
+    max_upload_mb: int = 2048
+
+    # Desktop-App: leer = eingebauter lokaler Server, sonst z. B. http://r640:8765
+    server_url: str = ""
+
     def __post_init__(self) -> None:
         if not self.output_dir:
             self.output_dir = default_output_dir()
+        if not self.data_dir:
+            self.data_dir = default_data_dir()
 
     @property
     def answer_tokens(self) -> int:

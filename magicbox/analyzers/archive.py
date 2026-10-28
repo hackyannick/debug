@@ -6,9 +6,14 @@ import bz2
 import gzip
 import io
 import lzma
+import os
+import subprocess
 import tarfile
+import tempfile
 import zipfile
+import zlib
 
+from magicbox import tools
 from magicbox.model import AnalysisResult, Section, Table
 
 from .base import Analyzer, Context, human_size
@@ -37,9 +42,82 @@ def _container_type(names: set[str]) -> str | None:
     return None
 
 
+def _rmtree(path: str) -> None:
+    import shutil
+
+    shutil.rmtree(path, ignore_errors=True)
+
+
+def tools_tail(proc) -> str:
+    text = (proc.stderr or proc.stdout).strip().splitlines()
+    return text[-1][:300] if text else f"Exit-Code {proc.returncode}"
+
+
+class _PasswordOpener:
+    """Probiert bekannte Passwörter (z. B. „infected“) für verschlüsselte ZIP-Einträge – ZipCrypto und AES."""
+
+    def __init__(self, ctx: Context):
+        self.ctx = ctx
+        self.passwords = list(dict.fromkeys(ctx.settings.archive_passwords))
+        self.used: str | None = None
+        self._aes = None
+
+    def _candidates(self):
+        if self.used:
+            yield self.used
+        yield from (p for p in self.passwords if p != self.used)
+
+    def read(self, zf: zipfile.ZipFile, info: zipfile.ZipInfo) -> bytes | None:
+        for pw in self._candidates():
+            try:
+                data = zf.read(info, pwd=pw.encode())
+                self.used = pw
+                return data
+            except NotImplementedError:  # AES (WinZip/7-Zip) – Standardbibliothek kann das nicht
+                return self._read_aes(info)
+            except (RuntimeError, zipfile.BadZipFile, zlib.error, OSError):
+                continue
+        return None
+
+    def _read_aes(self, info: zipfile.ZipInfo) -> bytes | None:
+        try:
+            import pyzipper
+        except ImportError:
+            return self._read_7z(info)
+        if self._aes is None:
+            self._aes = pyzipper.AESZipFile(io.BytesIO(self.ctx.data))
+        for pw in self._candidates():
+            try:
+                data = self._aes.read(info.filename, pwd=pw.encode())
+                self.used = pw
+                return data
+            except (RuntimeError, zipfile.BadZipFile, zlib.error, OSError, NotImplementedError):
+                continue
+        return None
+
+    def _read_7z(self, info: zipfile.ZipInfo) -> bytes | None:
+        exe = tools.which(self.ctx.settings.sevenzip_path) or tools.which("7zz") or tools.which("7za")
+        if not exe:
+            return None
+        with tempfile.TemporaryDirectory(prefix="magicbox_zip_") as tmp:
+            archive = os.path.join(tmp, "a.zip")
+            with open(archive, "wb") as f:
+                f.write(self.ctx.data)
+            for pw in self._candidates():
+                try:  # Binärausgabe über stdout -> nicht tools.run (das dekodiert Text)
+                    proc = subprocess.run([exe, "e", "-so", "-bd", f"-p{pw}", archive, info.filename],
+                                          capture_output=True, timeout=120, stdin=subprocess.DEVNULL)
+                except subprocess.TimeoutExpired:
+                    return None
+                if proc.returncode == 0:
+                    self.used = pw
+                    return proc.stdout
+        return None
+
+
 class ArchiveAnalyzer(Analyzer):
     name = "archive"
-    kinds = ("zip", "tar", "gzip", "bzip2", "xz")
+    kinds = ("zip", "tar", "gzip", "bzip2", "xz", "7z", "rar")
 
     def analyze(self, ctx: Context, result: AnalysisResult) -> None:
         s = ctx.settings
@@ -50,6 +128,8 @@ class ArchiveAnalyzer(Analyzer):
         try:
             if result.kind == "zip":
                 members = self._zip(ctx, result)
+            elif result.kind in ("7z", "rar"):
+                members = self._sevenzip(ctx, result)
             else:
                 members = self._tar(ctx, result)
         except (zipfile.BadZipFile, tarfile.TarError, EOFError, OSError) as exc:
@@ -57,7 +137,7 @@ class ArchiveAnalyzer(Analyzer):
             return
 
         names = {m[0] for m in members}
-        ctype = _container_type(names)
+        ctype = _container_type(names) if result.kind == "zip" else None
         if ctype:
             result.description = ctype
         rows = [[n, human_size(sz)] for n, sz, _ in members[:500]]
@@ -106,30 +186,98 @@ class ArchiveAnalyzer(Analyzer):
 
     def _zip(self, ctx: Context, result: AnalysisResult):
         take = self._budget(ctx)
-        out, skipped, encrypted = [], 0, 0
+        out, skipped, locked = [], 0, []
+        opener = _PasswordOpener(ctx)
         with zipfile.ZipFile(io.BytesIO(ctx.data)) as zf:
             for info in zf.infolist():
                 if info.is_dir():
                     continue
                 data = None
-                if info.flag_bits & 0x1:
-                    encrypted += 1
-                elif take(info.file_size):
+                if not take(info.file_size):
+                    skipped += 1
+                elif info.flag_bits & 0x1:
+                    data = opener.read(zf, info)
+                    if data is None:
+                        locked.append(info.filename)
+                else:
                     try:
                         data = zf.read(info)
-                    except (zipfile.BadZipFile, NotImplementedError, RuntimeError, OSError) as exc:
+                    except NotImplementedError:
+                        data = opener.read(zf, info)  # z. B. Deflate64 – evtl. kann 7-Zip helfen
+                    except (zipfile.BadZipFile, RuntimeError, OSError, zlib.error) as exc:
                         result.errors.append(f"{info.filename}: {exc}")
-                else:
-                    skipped += 1
                 out.append((info.filename, info.file_size, data))
                 ratio = info.file_size / max(1, info.compress_size)
                 if ratio > 200 and info.file_size > 50 * 1024 * 1024:
                     result.find("high", "Verdacht auf ZIP-Bombe", f"{info.filename}: Kompressionsrate {ratio:.0f}:1")
-        if encrypted:
-            result.find("low", "Passwortgeschützte Einträge", f"{encrypted} Dateien sind verschlüsselt und wurden nicht analysiert.")
+        if opener.used:
+            result.find("info", "Passwortgeschütztes Archiv geöffnet", f"Passwort: „{opener.used}“")
+        if locked:
+            result.find("low", "Passwortgeschützte Einträge",
+                        f"{len(locked)} Datei(en) ließen sich mit keinem bekannten Passwort öffnen "
+                        "(Passwort beim Hochladen angeben oder in den Einstellungen ergänzen).")
         if skipped:
             result.find("info", "Limit erreicht", f"{skipped} Einträge wurden wegen Größen-/Anzahl-Limits nicht entpackt.")
         return out
+
+    def _sevenzip(self, ctx: Context, result: AnalysisResult):
+        """7z/RAR (und Fallback für exotische ZIPs) über die 7-Zip-Kommandozeile, inkl. Passwortversuche."""
+        exe = tools.which(ctx.settings.sevenzip_path) or tools.which("7zz") or tools.which("7za")
+        if not exe:
+            result.find("info", f"{result.kind.upper()}-Archiv nicht entpackt", "7-Zip ist nicht installiert (apt install p7zip-full).")
+            return []
+        limit, max_members = ctx.settings.max_extract_bytes, ctx.settings.max_archive_members
+        with tempfile.TemporaryDirectory(prefix="magicbox_7z_") as tmp:
+            archive = os.path.join(tmp, "archiv")
+            with open(archive, "wb") as f:
+                f.write(ctx.data)
+            outdir = os.path.join(tmp, "out")
+            for pw in [None] + list(ctx.settings.archive_passwords):
+                pw_arg = f"-p{pw}" if pw else "-pMAGICBOX-KEIN-PASSWORT"
+                try:
+                    listing = tools.run([exe, "l", "-slt", "-bd", pw_arg, archive], timeout=120)
+                except subprocess.TimeoutExpired:
+                    result.errors.append("7-Zip: Zeitlimit beim Auflisten")
+                    return []
+                sizes = [int(l.split("=", 1)[1]) for l in listing.stdout.splitlines()
+                         if l.startswith("Size = ") and l.split("=", 1)[1].strip().isdigit()]
+                if sum(sizes) > limit:
+                    result.find("medium", "Archiv zu groß zum Entpacken", f"{sum(sizes):,} Bytes entpackt – Limit {limit:,}.")
+                    return []
+                try:
+                    proc = tools.run([exe, "x", "-y", "-bd", "-snl-", pw_arg, f"-o{outdir}", archive],
+                                     timeout=ctx.settings.tool_timeout_s)
+                except subprocess.TimeoutExpired:
+                    result.errors.append("7-Zip: Zeitlimit beim Entpacken")
+                    return []
+                if proc.returncode == 0:
+                    if pw:
+                        result.find("info", "Passwortgeschütztes Archiv geöffnet", f"Passwort: „{pw}“")
+                    break
+                _rmtree(outdir)
+                if "Wrong password" not in proc.stdout + proc.stderr and "Can not open encrypted" not in proc.stdout + proc.stderr:
+                    result.errors.append(f"7-Zip: {tools_tail(proc)}")
+                    return []
+            else:
+                result.find("low", "Passwortgeschütztes Archiv", "Mit keinem bekannten Passwort zu öffnen.")
+                return []
+            result.tools.append("7z")
+            out, total = [], 0
+            for dirpath, _dirs, files in os.walk(outdir):
+                for fn in sorted(files):
+                    full = os.path.join(dirpath, fn)
+                    rel = os.path.relpath(full, outdir).replace(os.sep, "/")
+                    if os.path.islink(full):
+                        out.append((f"{rel} -> (Symlink)", 0, None))
+                        continue
+                    size = os.path.getsize(full)
+                    data = None
+                    if len(out) < max_members and total + size <= limit:
+                        with open(full, "rb") as f:
+                            data = f.read()
+                        total += size
+                    out.append((rel, size, data))
+            return out
 
     def _tar(self, ctx: Context, result: AnalysisResult):
         take = self._budget(ctx)

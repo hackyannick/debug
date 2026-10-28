@@ -1,197 +1,180 @@
-# Lokales LLM auf dem Dell PowerEdge R640 einrichten
+# Magic Box auf dem Dell PowerEdge R640 (Xeon Gold 5218R) – auch komplett offline
 
-Diese Anleitung macht aus dem R640 den KI-Server für die Magic Box. Grundlage ist **Ollama** auf
-Ubuntu Server 22.04/24.04 (Debian, Rocky usw. gehen genauso).
+Diese Anleitung macht aus dem R640 eine eigenständige Analyse-Box: Magic-Box-Server + lokales LLM (Ollama),
+erreichbar per Desktop-App oder Browser, auf Wunsch **ohne jede Internetverbindung**.
 
-> Der R640 hat typischerweise **keine GPU** – das ist okay. Moderne LLM-Runtimes (llama.cpp, auf dem
-> Ollama aufbaut) laufen gut auf Xeon-Scalable-CPUs mit **AVX-512**. Entscheidend sind **RAM-Größe** und
-> **Speicherbandbreite**, nicht die Kernzahl allein.
+## 1. Empfohlener Aufbau
 
-## 1. Hardware-Tipps für maximale Geschwindigkeit
-
-- **Alle Speicherkanäle bestücken:** Xeon Scalable (1./2. Gen.) hat 6 Kanäle pro Sockel. Ein RAM-Riegel pro
-  Kanal (also 6 bzw. 12 Riegel) bringt deutlich mehr Token/s als wenige große Riegel.
-- **BIOS:** System Profile auf *Performance*, Logical Processor (Hyper-Threading) darf an bleiben.
-- **Zwei Sockel (NUMA):** LLM-Inferenz leidet, wenn Speicher zwischen den CPUs hin- und hergeschoben wird.
-  Wenn das Modell in den RAM eines Sockels passt, ist es oft schneller, Ollama an einen Sockel zu binden
-  (siehe Abschnitt 4). Ausprobieren lohnt sich.
-- **GPU (optional):** Der R640 ist 1 HE und nimmt nur flache Karten mit niedriger Leistungsaufnahme auf
-  (z. B. eine NVIDIA T4 mit 16 GB). Kompatibilität, Riser und Kühlung vorher bei Dell prüfen. Mit GPU wird
-  es um ein Vielfaches schneller – Ollama erkennt NVIDIA-Karten automatisch.
-
-## 2. Ollama installieren
-
-```bash
-curl -fsSL https://ollama.com/install.sh | sh
+```
+ LAN ── Port 8765 ──► [ VM „magicbox“ auf dem R640 (Ubuntu) ]
+                         ├─ magicbox-server  (Analyse, Web-Oberfläche, Drop-Ordner)
+                         └─ ollama           (nur 127.0.0.1:11434, nicht im LAN)
+                       ausgehender Verkehr: gesperrt
 ```
 
-Das richtet automatisch einen systemd-Dienst `ollama` ein. Test:
+- **Eigene VM** (Proxmox/ESXi/KVM) für die Analyse – gibt eine saubere Trennung zum Rest und lässt sich per
+  Snapshot zurücksetzen. Bare-Metal geht auch.
+- **Linux** als Analyse-System: Windows-Malware kann dort nicht versehentlich starten.
+- Der VM möglichst **alle CPU-Kerne eines Sockels** und genug RAM für das Modell geben (siehe unten).
+
+## 2. Welches Modell für den Xeon Gold 5218R?
+
+Der 5218R (Cascade Lake, 20 Kerne) hat **AVX-512 inkl. VNNI** – das beschleunigt vor allem das Einlesen langer
+Prompts (die Magic Box schickt viele Fakten). Die Schreibgeschwindigkeit hängt dagegen fast nur an der
+**Speicherbandbreite** (6 Kanäle DDR4-2666 pro Sockel). Deshalb sind **Mixture-of-Experts-Modelle** ideal:
+viele Parameter (Qualität), aber pro Token nur wenige aktiv (Tempo).
+
+| Modell (Ollama-Name) | RAM (Q4) | aktive Parameter | grobe Schätzung | Einsatz |
+|---|---|---|---|---|
+| **`qwen3-coder:30b`** (MoE) | ~19 GB | ~3 B | ~12–20 Token/s | **Erste Wahl:** versteht Code/Assembly/Pseudocode sehr gut |
+| `gpt-oss:20b` (MoE) | ~14 GB | ~3,6 B | ~12–20 Token/s | Starke Alternative (etwas strengeres Sicherheits-Training) |
+| `gpt-oss:120b` (MoE) | ~65 GB | ~5 B | ~6–10 Token/s | Nur bei ≥ 96 GB RAM: beste Qualität |
+| `qwen2.5-coder:14b` | ~9 GB | 14 B | ~6–8 Token/s | Wenn wenig RAM frei ist |
+| `qwen2.5-coder:7b` | ~5 GB | 7 B | ~10–15 Token/s | Schnell, aber flachere Dokus |
+| ❌ dichte 32B/70B-Modelle | 20–40 GB | alle | ~1–4 Token/s | Zu langsam für mehrere KI-Anfragen pro Probe |
+
+Die Token/s sind aus der Speicherbandbreite geschätzt, nicht gemessen. Aktuelle Modelle: <https://ollama.com/library>.
+
+**Selbst messen** (`prompt eval rate` = Einlesen, `eval rate` = Schreiben):
 
 ```bash
-ollama --version
+ollama run qwen3-coder:30b --verbose "Erkläre, was CreateRemoteThread macht."
 ```
 
-## 3. Im Netzwerk erreichbar machen
-
-Standardmäßig lauscht Ollama nur auf `127.0.0.1`. Für Zugriffe von deinem Desktop:
+**AVX-512 aktiv?** Im Ollama-Log sollte `AVX512 = 1` stehen:
 
 ```bash
-sudo systemctl edit ollama.service
+journalctl -u ollama --no-pager | grep -i avx512
 ```
 
-Im Editor zwischen den Kommentarzeilen einfügen:
+### Hardware-Tipps
 
-```ini
-[Service]
-Environment="OLLAMA_HOST=0.0.0.0:11434"
-# Modell nach der letzten Anfrage 30 Minuten im RAM halten (spart Ladezeit)
-Environment="OLLAMA_KEEP_ALIVE=30m"
-# Eine Anfrage nach der anderen – auf CPU schneller als parallel
-Environment="OLLAMA_NUM_PARALLEL=1"
-```
+- **Alle 6 Speicherkanäle pro CPU bestücken** – bringt mehr als jede andere Einstellung:
+  ```bash
+  sudo dmidecode -t memory | grep -E "^\s+(Size|Speed|Locator):"
+  ```
+- BIOS: System Profile **Performance**.
+- **Zwei Sockel (NUMA):** Passt das Modell in den RAM eines Sockels, ist es oft schneller, Ollama an einen
+  Sockel zu binden (`sudo systemctl edit ollama.service`, `which ollama` für den Pfad):
+  ```ini
+  [Service]
+  ExecStart=
+  ExecStart=/usr/bin/numactl --cpunodebind=0 --membind=0 /usr/local/bin/ollama serve
+  ```
+  Vorher/nachher mit `--verbose` vergleichen.
+- Quantisierung Q4_K_M (Ollama-Standard) beibehalten; Q8 ist etwas besser, aber halb so schnell.
 
-Dann neu starten:
+## 3. Installation mit Internet (einmalig)
 
 ```bash
-sudo systemctl daemon-reload && sudo systemctl restart ollama
-```
-
-### Firewall – wichtig!
-
-Ollama hat **keine Authentifizierung**. Nur aus dem eigenen LAN freigeben, niemals ins Internet:
-
-```bash
-sudo ufw allow from 192.168.1.0/24 to any port 11434 proto tcp
-```
-
-(Netz an dein LAN anpassen.) Wer Zugriff von außen braucht: VPN (WireGuard/Tailscale) oder ein Reverse-Proxy
-mit Passwort davor – dann in der Magic Box den API-Key bzw. die Proxy-URL eintragen.
-
-## 4. Modell auswählen und laden
-
-Empfehlungen für Reverse-Engineering-Dokus (Code verstehen + gut formulieren). Modellnamen und verfügbare
-Größen ändern sich laufend – aktuelle Liste: <https://ollama.com/library>.
-
-| Modell (Ollama-Name) | RAM-Bedarf ca. | Einschätzung auf CPU |
-|---|---|---|
-| `qwen2.5-coder:7b` | ~6 GB | **Startpunkt.** Schnell, versteht Code/Assembly ordentlich, gutes Deutsch |
-| `qwen2.5-coder:14b` | ~10 GB | Spürbar bessere Analysen, etwa halb so schnell wie 7b |
-| `qwen3-coder:30b` (MoE) | ~20 GB | **Top-Tipp bei viel RAM:** Mixture-of-Experts, nur ein kleiner Teil der Parameter ist pro Token aktiv → auf CPU überraschend flott bei hoher Qualität |
-| `qwen3:14b` / `qwen3:30b` | ~10 / ~20 GB | Allround-Modelle mit „Denk“-Modus; `<think>`-Blöcke filtert die Magic Box automatisch heraus |
-| `llama3.1:8b` | ~6 GB | Solide Alternative, Deutsch etwas schwächer |
-
-Laden (Beispiel):
-
-```bash
-ollama pull qwen2.5-coder:7b
-```
-
-Kurzer Test direkt auf dem Server:
-
-```bash
-ollama run qwen2.5-coder:7b "Erkläre in zwei Sätzen, was die Windows-API CreateRemoteThread macht."
-```
-
-Geschwindigkeit messen (zeigt `eval rate` in Token/s):
-
-```bash
-ollama run qwen2.5-coder:7b --verbose "Schreibe ein Haiku über Assembler."
-```
-
-**Grobe Erwartung ohne GPU:** ein 7b-Modell liefert auf einem gut bestückten Dual-Xeon einige bis gut zehn
-Token/s; eine Doku (~1500 Token) braucht dann wenige Minuten. Große Archive mit vielen Teilanalysen dauern
-entsprechend länger – dafür ist der Drop-Folder-Modus (unten) ideal.
-
-### Optional: an einen CPU-Sockel binden (NUMA)
-
-```bash
-sudo apt install numactl
+git clone <dieses-repo> magicbox && cd magicbox
 ```
 
 ```bash
-sudo systemctl edit ollama.service
+sudo ./scripts/install_server.sh --model qwen3-coder:30b
 ```
 
-```ini
-[Service]
-ExecStart=
-ExecStart=/usr/bin/numactl --cpunodebind=0 --membind=0 /usr/local/bin/ollama serve
+Das Skript erledigt:
+
+1. Systempakete: radare2, UPX, 7-Zip, .NET-SDK (für ILSpy), Python-venv
+2. Benutzer `magicbox`, Ordner `/srv/magicbox/{daten,eingang,yara}`, Konfiguration `/etc/magicbox/settings.json`
+3. Python-Umgebung mit capa, YARA, oletools, dnfile, pyzipper
+4. capa-Regeln (passend zur capa-Version) und YARA-Forge-Regeln
+5. ilspycmd (.NET-Dekompiler)
+6. Ollama (nur auf `127.0.0.1`) und das Modell
+7. Den abgesicherten Dienst `magicbox-server` (Port 8765) mit zufälligem Zugangsschlüssel
+
+Am Ende steht die URL inkl. Schlüssel im Terminal. Der Schlüssel liegt auch in `/etc/magicbox/settings.json`
+(`web_token`).
+
+**Danach Internet kappen** (siehe Abschnitt 5) – die Box braucht es nicht mehr.
+
+## 4. Installation komplett ohne Internet
+
+Auf einem Rechner **mit** Internet – am besten eine frische VM/ein Container mit **derselben Ubuntu-Version**
+wie der Server (sonst passen .deb-Pakete und Python-Wheels nicht):
+
+```bash
+./scripts/make_offline_bundle.sh --model qwen3-coder:30b
 ```
 
-Den Pfad zu `ollama` mit `which ollama` prüfen. Vorher/nachher mit `--verbose` vergleichen und die
-schnellere Variante behalten.
+Das erzeugt `magicbox-offline.tar.gz` mit: Python-Wheels, .deb-Paketen inkl. Abhängigkeiten, capa- und
+YARA-Regeln, ilspycmd, Ollama und – falls Ollama auf dem Online-Rechner installiert ist – den Modelldateien.
+Per USB-Stick auf den Server bringen, dann:
 
-## 5. Magic Box verbinden
+```bash
+tar xzf magicbox-offline.tar.gz && cd magicbox-offline/magicbox
+```
 
-In der App unter **⚙️ Einstellungen**:
+```bash
+sudo ./scripts/install_server.sh --offline .. --model qwen3-coder:30b
+```
 
-| Feld | Wert |
+Modell ohne Ollama auf dem Online-Rechner? Den Ordner `~/.ollama/models` (bzw. `/usr/share/ollama/.ollama/models`)
+von irgendeinem Rechner mit dem gezogenen Modell nach `magicbox-offline/ollama-models/` kopieren.
+
+## 5. Abschotten
+
+Nur die Magic Box aus dem LAN erlauben, alles andere – vor allem **ausgehend** – sperren:
+
+```bash
+sudo ufw default deny incoming
+```
+
+```bash
+sudo ufw default deny outgoing
+```
+
+```bash
+sudo ufw allow from 192.168.1.0/24 to any port 8765 proto tcp
+```
+
+```bash
+sudo ufw allow from 192.168.1.0/24 to any port 22 proto tcp
+```
+
+```bash
+sudo ufw enable
+```
+
+(Netz an dein LAN anpassen; SSH-Regel nur, wenn du sie brauchst. Ollama ist ohnehin nur lokal erreichbar.)
+Updates später wieder über ein neues Offline-Bundle oder kurzzeitig geöffneten Ausgang.
+
+## 6. Benutzen
+
+- **Browser:** `http://<server>:8765/?token=<schlüssel>`
+- **Desktop-App** (Windows/Linux/macOS): `scripts/start_windows.bat` bzw. `scripts/start_linux.sh`, dann
+  *Magic Box → Server wechseln …* → `http://<server>:8765`, beim ersten Öffnen den Schlüssel eingeben.
+- **Drop-Ordner:** `/srv/magicbox/eingang` per Samba freigeben – alles, was dort landet, erscheint als Auftrag.
+  Proben am besten als ZIP mit Passwort `infected` transportieren (wird automatisch geöffnet), damit der
+  Virenscanner des Arbeitsplatzes sie nicht vorher löscht.
+
+Logs:
+
+```bash
+journalctl -u magicbox-server -f
+```
+
+Einstellungen (Modell, Kontextgröße, Zielgruppe, Passwörter, eigene YARA-Regeln …) lassen sich in der
+Oberfläche unter **⚙️ Einstellungen** ändern. Netzwerk und Zugangsschlüssel nur in `/etc/magicbox/settings.json`
+(danach `sudo systemctl restart magicbox-server`).
+
+### Empfohlene Einstellungen für den 5218R
+
+| Einstellung | Wert |
 |---|---|
-| Schnittstelle | Ollama |
-| Server-URL | `http://<IP-oder-Name-des-R640>:11434` |
-| Modell | z. B. `qwen2.5-coder:7b` (oder „Modelle laden“ klicken) |
-| Kontextgröße | 16384 (bei 7b/14b gut; mehr Kontext = mehr RAM und langsamer) |
+| Modell | `qwen3-coder:30b` |
+| Kontextgröße | 16384 (bei zu langsamem Einlesen 8192 – die Box teilt dann stärker auf) |
+| Max. KI-Teilanalysen | 6–8 bei großen Archiven |
+| Zielgruppe | „für Sicherheitsanalysten“ oder „technisch interessierte Laien“ |
 
-Dann **Verbindung testen**. Alternativ per Kommandozeile:
+## Alternative LLM-Server
 
-```bash
-magicbox check --url http://r640:11434 --model qwen2.5-coder:7b
-```
-
-> Die Magic Box übergibt die Kontextgröße bei jeder Anfrage (`num_ctx`). Ohne das würde Ollama mit einem
-> kleinen Standardkontext arbeiten und lange Analysen still abschneiden.
-
-## 6. Bonus: Magic Box als „Briefkasten“ direkt auf dem R640
-
-Statt die GUI zu benutzen, kann der R640 selbst die Box sein: Datei per Netzwerkfreigabe hineinkopieren,
-Bericht kommt automatisch zurück.
+Statt Ollama funktioniert jeder **OpenAI-kompatible** Server (Schnittstelle „OpenAI-kompatibel“), z. B.
+`llama-server` aus llama.cpp:
 
 ```bash
-sudo useradd --system --create-home --home-dir /opt/magicbox magicbox
+llama-server -m qwen3-coder-30b-a3b-q4_k_m.gguf --host 127.0.0.1 --port 8080 -c 16384
 ```
 
-```bash
-sudo -u magicbox git clone <dein-repo> /opt/magicbox/app
-```
-
-```bash
-cd /opt/magicbox && sudo -u magicbox python3 -m venv .venv && sudo -u magicbox .venv/bin/pip install -e ./app
-```
-
-```bash
-sudo mkdir -p /srv/magicbox/eingang && sudo chown -R magicbox: /srv/magicbox
-```
-
-Optional radare2 für Pseudocode:
-
-```bash
-sudo apt install radare2
-```
-
-Dienst einrichten (Pfade in der Datei ggf. anpassen):
-
-```bash
-sudo cp /opt/magicbox/app/scripts/magicbox-watch.service /etc/systemd/system/
-```
-
-```bash
-sudo systemctl daemon-reload && sudo systemctl enable --now magicbox-watch
-```
-
-Jetzt `/srv/magicbox/eingang` per Samba freigeben. Alles, was du hineinlegst, wird analysiert; Berichte
-landen in `eingang/_berichte/`, Originale in `eingang/_erledigt/`. Log ansehen:
-
-```bash
-journalctl -u magicbox-watch -f
-```
-
-## Alternative zu Ollama
-
-Jeder **OpenAI-kompatible** Server funktioniert ebenfalls (Schnittstelle „OpenAI-kompatibel“ wählen):
-`llama-server` aus llama.cpp, vLLM (mit GPU), LM Studio, LocalAI. Beispiel llama.cpp:
-
-```bash
-llama-server -m qwen2.5-coder-7b-instruct-q4_k_m.gguf --host 0.0.0.0 --port 8080 -c 16384
-```
-
-In der Magic Box dann `http://r640:8080` eintragen.
+Dann als Server-URL `http://127.0.0.1:8080` eintragen.

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import csv
 import datetime as dt
 import html
 import json
@@ -32,6 +33,7 @@ class ReportFiles:
     markdown: Path
     html: Path
     json: Path
+    iocs: Path
 
 
 def _cell(value: str) -> str:
@@ -70,6 +72,52 @@ def _all_findings(result: AnalysisResult):
             yield r, f
 
 
+def defang(kind: str, value: str) -> str:
+    """Entschärft IOCs, damit sie nicht versehentlich anklickbar/auflösbar sind (hxxp://evil[.]com)."""
+    if kind == "URL":
+        scheme, sep, rest = value.partition("://")
+        host, slash, path = rest.partition("/")
+        return scheme.replace("http", "hxxp").replace("ftp", "fxp") + sep + host.replace(".", "[.]") + slash + path
+    if kind in ("Domain", "IPv4"):
+        return value.replace(".", "[.]")
+    if kind == "E-Mail":
+        user, _, dom = value.partition("@")
+        return f"{user}[@]{dom.replace('.', '[.]')}"
+    return value
+
+
+def all_iocs(result: AnalysisResult) -> list[tuple[str, str, str]]:
+    """(Typ, Wert, Datei) über alle (auch verschachtelten) Dateien, ohne Duplikate."""
+    seen, out = set(), []
+    for r in result.walk():
+        for kind, values in r.iocs.items():
+            for v in values:
+                if (kind, v) not in seen:
+                    seen.add((kind, v))
+                    out.append((kind, v, r.name))
+    return out
+
+
+def _ioc_md(result: AnalysisResult) -> list[str]:
+    iocs = all_iocs(result)
+    files = [r for r in result.walk() if r.hashes]
+    if not iocs and len(files) <= 1:
+        return []
+    out = ["## Indikatoren (IOCs)", "",
+           "*Werte sind entschärft (z. B. `hxxp://evil[.]com`). Unverändert als CSV: `iocs.csv` im Berichtsordner.*", ""]
+    if iocs:
+        out += ["| Typ | Wert | gefunden in |", "|---|---|---|"]
+        for kind, value, src in iocs[:400]:
+            out.append(f"| {kind} | `{_cell(defang(kind, value))}` | {_cell(src)} |")
+        if len(iocs) > 400:
+            out.append(f"\n*… {len(iocs) - 400} weitere in iocs.csv*")
+        out.append("")
+    out += ["**Datei-Hashes**", "", "| Datei | SHA-256 | MD5 |", "|---|---|---|"]
+    out += [f"| {_cell(r.name)} | `{r.hashes['sha256']}` | `{r.hashes['md5']}` |" for r in files[:200]]
+    out.append("")
+    return out
+
+
 def rule_based_summary(result: AnalysisResult) -> str:
     """Kurzfassung ohne KI – aus den Fakten abgeleitet."""
     lines = [f"**{result.name}** ist ein(e) **{result.description}** mit {human_size(result.size)}."]
@@ -83,6 +131,9 @@ def rule_based_summary(result: AnalysisResult) -> str:
                 kinds[c.description] = kinds.get(c.description, 0) + 1
         top = sorted(kinds.items(), key=lambda kv: -kv[1])[:6]
         lines.append(f"Enthält {sum(kinds.values())} Dateien, u. a.: " + ", ".join(f"{n}× {d}" for d, n in top) + ".")
+    detections = sorted({d for r in result.walk() for d in r.detections})
+    if detections:
+        lines.append("YARA-Treffer: " + ", ".join(f"`{d}`" for d in detections) + ".")
     counts = {sev: 0 for sev in SEV_ORDER}
     for _, f in _all_findings(result):
         counts[f.severity] += 1
@@ -124,6 +175,7 @@ def build_markdown(result: AnalysisResult, llm_error: str = "") -> str:
             out.append(f"| {SEV_ICON[f.severity]} {SEV_NAME[f.severity]} | {_cell(r.name)} | {_cell(f.title)} | {_cell(f.detail)} |")
         out.append("")
 
+    out += _ioc_md(result)
     out += ["---", "", "## Technischer Anhang", ""]
     out += _result_md(result, 3)
     return "\n".join(out)
@@ -210,13 +262,23 @@ def safe_name(name: str) -> str:
     return cleaned[:60]
 
 
-def write_report(result: AnalysisResult, out_dir: Path, llm_error: str = "") -> ReportFiles:
-    stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
-    folder = Path(out_dir).expanduser() / f"{safe_name(result.name)}_{stamp}"
+def write_report(result: AnalysisResult, out_dir: Path, llm_error: str = "", folder: Path | None = None) -> ReportFiles:
+    """Schreibt den Bericht in ``folder`` bzw. einen neuen Unterordner von ``out_dir``."""
+    if folder is None:
+        stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+        folder = Path(out_dir).expanduser() / f"{safe_name(result.name)}_{stamp}"
     folder.mkdir(parents=True, exist_ok=True)
     md_text = build_markdown(result, llm_error)
-    files = ReportFiles(folder, folder / "bericht.md", folder / "bericht.html", folder / "analysis.json")
+    files = ReportFiles(folder, folder / "bericht.md", folder / "bericht.html", folder / "analysis.json",
+                        folder / "iocs.csv")
     files.markdown.write_text(md_text, encoding="utf-8")
     files.html.write_text(build_html(md_text, f"Analyse: {result.name}"), encoding="utf-8")
     files.json.write_text(json.dumps(result.to_dict(), indent=1, ensure_ascii=False), encoding="utf-8")
+    with files.iocs.open("w", encoding="utf-8", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["typ", "wert", "datei"])
+        w.writerows(all_iocs(result))
+        for r in result.walk():
+            if r.hashes:
+                w.writerow(["SHA-256", r.hashes["sha256"], r.name])
     return files

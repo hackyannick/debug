@@ -44,6 +44,7 @@ class PEAnalyzer(Analyzer):
         is_dll = pe.is_dll()
         is_driver = oh.Subsystem == 1 or pe.is_driver()
         clr = oh.DATA_DIRECTORY[14].VirtualAddress != 0
+        ctx.facts["dotnet"] = clr
         try:
             ts = dt.datetime.fromtimestamp(fh.TimeDateStamp, dt.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
         except (OverflowError, OSError, ValueError):
@@ -53,7 +54,7 @@ class PEAnalyzer(Analyzer):
         if clr:
             kind += " – .NET/Managed Code"
             result.find("info", ".NET-Assembly",
-                        "Managed Code: Mit dnSpy/ILSpy lässt sich nahezu der Original-C#-Code zurückgewinnen.")
+                        "Managed Code: Klassen, Methoden und String-Literale lassen sich fast vollständig rekonstruieren.")
         result.description = f"Windows PE – {kind}"
 
         kv = {
@@ -172,8 +173,8 @@ class PEAnalyzer(Analyzer):
 
     def _code(self, pe, ctx: Context, result: AnalysisResult, arch: str | None,
               iat: dict[int, str], exports: dict[int, str]) -> None:
-        if not disasm.available(arch):
-            return
+        if not disasm.available(arch) or ctx.facts.get("dotnet"):
+            return  # .NET: Einstiegspunkt ist nur ein Sprung in die CLR – C# kommt vom .NET-Analyzer
         base = pe.OPTIONAL_HEADER.ImageBase
         names = dict(iat)
         names.update({base + rva: name for rva, name in exports.items()})

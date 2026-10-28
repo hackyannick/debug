@@ -1,4 +1,4 @@
-"""Kommandozeile: magicbox [gui] | analyze DATEI… | watch ORDNER | check | models"""
+"""Kommandozeile: magicbox [desktop] | server | analyze DATEI… | watch ORDNER | check | models"""
 
 from __future__ import annotations
 
@@ -109,9 +109,22 @@ def cmd_models(args) -> int:
         return 1
 
 
-def cmd_gui(_args) -> int:
+def cmd_desktop(args) -> int:
     from magicbox.gui.app import main as gui_main
-    return gui_main()
+    return gui_main(server_url=getattr(args, "server", None))
+
+
+def cmd_server(args) -> int:
+    from magicbox.server import serve
+
+    config = Path(args.config).expanduser() if args.config else None
+    s = Settings.load(config) if config else Settings.load()
+    if args.data:
+        s.data_dir = args.data
+    if args.token:
+        s.web_token = args.token
+    serve(s, host=args.host, port=args.port, watch=[Path(w) for w in args.watch or []], config_path=config)
+    return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -151,15 +164,25 @@ def build_parser() -> argparse.ArgumentParser:
     m = sub.add_parser("models", help="Verfügbare Modelle auflisten")
     llm_opts(m)
     m.set_defaults(func=cmd_models)
-    g = sub.add_parser("gui", help="Desktop-Oberfläche starten (Standard)")
-    g.set_defaults(func=cmd_gui)
+    srv = sub.add_parser("server", help="Server + Web-Oberfläche starten (z. B. auf dem R640)")
+    srv.add_argument("--host", help="Adresse, z. B. 0.0.0.0 für Zugriff aus dem LAN (Standard 127.0.0.1)")
+    srv.add_argument("--port", type=int, help="Port (Standard 8765)")
+    srv.add_argument("--data", help="Datenordner für Proben & Berichte")
+    srv.add_argument("--token", help="Zugangsschlüssel für die Web-Oberfläche")
+    srv.add_argument("--watch", action="append", help="Drop-Ordner überwachen (mehrfach möglich)")
+    srv.add_argument("--config", help="Pfad zur settings.json")
+    srv.set_defaults(func=cmd_server)
+
+    g = sub.add_parser("desktop", help="Desktop-App starten (Standard)")
+    g.add_argument("--server", help="Mit Server verbinden, z. B. http://r640:8765 (leer = lokal)")
+    g.set_defaults(func=cmd_desktop)
     return p
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if not getattr(args, "func", None):
-        return cmd_gui(args)
+        return cmd_desktop(args)
     return args.func(args)
 
 

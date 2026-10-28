@@ -6,6 +6,6 @@ if [ ! -d .venv ]; then
     echo "Erstelle virtuelle Umgebung …"
     python3 -m venv .venv
     .venv/bin/python -m pip install --upgrade pip
-    .venv/bin/python -m pip install -e '.[gui]'
+    .venv/bin/python -m pip install -e '.[desktop,malware]'
 fi
-exec .venv/bin/python -m magicbox gui "$@"
+exec .venv/bin/python -m magicbox desktop "$@"
