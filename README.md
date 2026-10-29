@@ -20,7 +20,7 @@ die dein Netzwerk verlassen.
 |---|---|
 | **Server** (`magicbox server`) | Nimmt Proben entgegen, arbeitet sie nacheinander ab, speichert Berichte. Läuft ideal auf dem R640 (Linux) – dort kann eine Windows-Probe nicht versehentlich gestartet werden. |
 | **Web-Oberfläche** | Wird vom Server ausgeliefert. Komplett offline (kein CDN, keine externen Fonts), dunkles Design. |
-| **Windows-App** (`desktop/`) | Echte Win32-Anwendung (WinForms, .NET Framework 4.8 – auf Windows 10/11 schon vorhanden) im Office-2003-Design. Spricht ausschließlich über die REST-API mit dem Server, Live-Ansicht per Server-Sent Events, Anmeldung über den System-Browser (Ory). Installer ≈ 300 KB. |
+| **Windows-App** (`desktop/`) | Echte Win32-Anwendung (WinForms, .NET Framework 4.8 – auf Windows 10/11 schon vorhanden) im Office-2003-Design. Spricht ausschließlich über die REST-API mit dem Server, Live-Ansicht per Server-Sent Events, Anmeldung über den System-Browser (Ory). Installer ≈ 2 MB. |
 | **Desktop-App für Linux/macOS** (`magicbox desktop`) | Fenster mit eingebettetem Chromium (Qt WebEngine) um die Web-Oberfläche; ohne Server-Adresse startet sie einen eigenen Server lokal. |
 | **Drop-Ordner** | Datei in einen (Samba-)Ordner legen → taucht als Auftrag in der Oberfläche auf. |
 | **CLI** | `magicbox analyze probe.exe` für Skripte und Batch-Läufe. |
