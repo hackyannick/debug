@@ -88,7 +88,7 @@ class Engine:
         if self.software:
             result.findings = self._software_findings(result.findings)
         if depth == 0:
-            aggregate(result)  # Funktionslandkarten aller enthaltenen Dateien für die Gesamt-Doku
+            aggregate(result, set(self.shared.get("first_party_tokens", ())))  # Landkarten für die Gesamt-Doku
         self.log(f"  → {result.description}")
         return result
 
@@ -133,5 +133,5 @@ class Engine:
             rows.append([rel, child.description])
         result.add(Section(f"Inhalt ({len(files)} Dateien)", table=Table(["Datei", "Typ"], rows, total=len(files)),
                            llm_priority=0))
-        aggregate(result)
+        aggregate(result, set(self.shared.get("first_party_tokens", ())))
         return result

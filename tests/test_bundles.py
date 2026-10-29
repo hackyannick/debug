@@ -134,3 +134,18 @@ def test_channel_grouping_and_sql_detection():
     assert lines == ["player (2): pause-music, play-music", "weitere (2): chromecast-scan, notify-error"]
     assert detect(b"BEGIN TRANSACTION;\nCREATE TABLE x (id INT);\nCOMMIT;\n", "qobuz.sqlite") == \
         ("source", "Quelltext/Skript (sql)")
+
+
+def test_feature_areas_from_identifiers():
+    from magicbox.analyzers.jsbundle import feature_areas
+    facts = {"ipc": {c: "on" for c in ("play-music", "pause-music", "change-volume", "chromecast-scan-for-devices",
+                                        "chromecast-player-use-device", "open-download-folder", "flush-all-cache",
+                                        "send-log", "notify-error")},
+             "actions": ["SEARCH/ALL", "search/albums", "favorite/create", "playlist/addTracks"],
+             "api_paths": ["/discover/new-releases", "/discover/playlists"]}
+    areas = {label: (n, ex) for label, n, ex in feature_areas(facts)}
+    assert areas["Wiedergabe & Warteschlange"][0] >= 3
+    assert "chromecast-scan-for-devices" in areas["Wiedergabe auf anderen Geräten (Chromecast, DLNA, Connect)"][1]
+    assert set(areas) >= {"Suche", "Downloads & Offline-Nutzung", "Entdecken, Redaktion & Radio",
+                          "Bibliothek, Favoriten & Playlists", "Fehlerberichte & Protokolle"}
+    assert "Konto & Anmeldung" not in areas  # keine Belege → kein Bereich

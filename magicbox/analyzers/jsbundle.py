@@ -73,12 +73,16 @@ DOC_HOSTS = {
     "developer.mozilla.org", "mozilla.org", "www.w3.org", "w3.org", "purl.org", "json-schema.org", "tools.ietf.org",
     "example.com", "example.org", "localhost", "ns.adobe.com", "schemas.microsoft.com", "www.npmjs.com",
     "stackoverflow.com", "en.wikipedia.org", "opentelemetry.io", "nextjs.org", "vuejs.org", "angular.io",
+    "vitest.dev", "html.spec.whatwg.org", "whatwg.org", "testing-playground.com", "redux-toolkit.js.org",
+    "mozilla.github.io", "unpkg.com", "jsfiddle.net", "codepen.io", "caniuse.com", "web.dev", "v8.dev",
 }
 SOCIAL_HOSTS = {
     "facebook.com", "www.facebook.com", "graph.facebook.com", "twitter.com", "x.com", "linkedin.com",
     "www.linkedin.com", "vk.com", "connect.ok.ru", "connect.mail.ru", "www.reddit.com", "reddit.com",
     "www.instapaper.com", "www.youtube.com", "www.youtube-nocookie.com", "pinterest.com", "www.pinterest.com",
-    "t.me", "wa.me", "api.whatsapp.com",
+    "t.me", "wa.me", "api.whatsapp.com", "www.tumblr.com", "api.tumblr.com", "tumblr.com", "bookmark.hatenaapis.com",
+    "b.hatena.ne.jp", "social-plugins.line.me", "service.weibo.com", "getpocket.com", "api.pinterest.com",
+    "tinyurl.com", "www.xing.com", "telegram.me", "mastodon.social", "www.addtoany.com",
 }
 HOST_RE = re.compile(r"^[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}$")
 # Namen von Node-Modulen, Pfaden und Formaten, die wie Aktionsnamen aussehen
@@ -90,6 +94,9 @@ NOISE_ACTION_HEADS = {
     "console", "constants", "dgram", "module", "process", "async", "http", "https", "text", "application", "image",
     "audio", "video", "font", "multipart", "data", "blob", "mailto", "tel", "about", "chrome", "file", "javascript",
     "webpack", "src", "dist", "assets", "static", "legacy", "react", "redux", "moment", "sentry", "babel", "core",
+    "sequelize", "packages", "allownull", "hover", "display", "color", "font", "margin", "padding", "position", "width",
+    "height", "border", "background", "cursor", "overflow", "opacity", "transform", "transition", "focus", "active",
+    "visited", "before", "after", "tinyspy", "vitest", "jest",
 }
 DE_WORDS = {"der", "die", "das", "und", "nicht", "sie", "ihre", "ihr", "ist", "wird", "werden", "bitte", "mit", "für",
             "auf", "eine", "einen", "keine", "kann", "können", "wurde", "wurden", "zu", "von", "oder", "jetzt"}
@@ -100,6 +107,14 @@ OTHER_WORDS = {"você", "não", "está", "usted", "puedes", "para", "las", "los"
 LIBRARY_MARKERS = re.compile(r"sentry|sequelize|moment|jszip|socks|\bspan\b|transaction|\bdsn\b|deprecated|spotlight|"
                              r"tracing|promise|callback|undefined|instance|webpack|polyfill|eslint|\breact\b|redux|"
                              r"\bprop\b|argument|stack ?trace|\bmodule\b|options object|isolation scope", re.I)
+
+
+def ui_rank(text: str, own: set[str] = frozenset()) -> tuple:
+    """Oberflächentexte vor Meldungen eingebauter Bibliotheken: an Nutzer gerichtet, Produktname, Großschreibung."""
+    low = text.lower()
+    addressed = bool(re.search(r"\b(you|your|sie|ihre?n?|du|dein)\b", low))
+    product = any(o in low.replace(" ", "") for o in own)
+    return (bool(LIBRARY_MARKERS.search(text)), not (addressed or product), not text[:1].isupper(), _readability(text))
 
 
 def _language_ok(text: str) -> bool:
@@ -169,16 +184,61 @@ def extract(text: str, own: set[str] = frozenset()) -> dict:
     texts = {t.strip() for m in QUOTED_RE.finditer(text) for t in [m.group(1) or m.group(2)]
              if " " in t and not t.startswith(("http", "/", ".", "#")) and "{" not in t and "=" not in t}
 
-    def ui_rank(t: str) -> tuple:
-        low = t.lower()
-        addressed = bool(re.search(r"\b(you|your|sie|ihre?n?|du|dein)\b", low))
-        product = any(o in low.replace(" ", "") for o in own)
-        return (bool(LIBRARY_MARKERS.search(t)), not (addressed or product), _readability(t))
-
     natural = [t for t in texts if not _readability(t)[0] and _language_ok(t)]
     if natural:
-        facts["texts"] = sorted(natural, key=ui_rank)[:50]
+        facts["texts"] = sorted(natural, key=lambda t: ui_rank(t, own))[:50]
     return facts
+
+
+# Funktionsbereiche: Wörter in Kanal-, Aktions- und Routennamen → verständliche Bereiche (für die Gliederung der Doku)
+AREAS = [
+    ("Wiedergabe & Warteschlange", {"player", "playqueue", "queue", "shuffle", "repeat", "volume", "pause", "play",
+                                    "seek", "playback"}, set()),
+    ("Ausgabegeräte & Audioqualität", {"output", "exclusive", "asio", "wasapi", "samplerate", "hires", "quality",
+                                       "dsd", "dxd", "bitdepth", "equalizer", "devices", "device"}, {"hi-res", "hi-fi", "audio-output"}),
+    ("Wiedergabe auf anderen Geräten (Chromecast, DLNA, Connect)",
+     {"chromecast", "cast", "castdevice", "dlna", "upnp", "airplay", "renderer", "renderers", "qconnect"}, set()),
+    ("Downloads & Offline-Nutzung", {"download", "downloads", "downloaded", "offline", "cache"}, set()),
+    ("Käufe, Shop & Guthaben", {"purchase", "purchases", "wallet", "coins", "cashback", "checkout", "payment",
+                                "subscription", "subscribe", "price", "buy"}, {"store-router", "webstore"}),
+    ("Lokale Musik & Import", {"import", "imports", "imported"}, {"localmusic", "/local/"}),
+    ("Bibliothek, Favoriten & Playlists", {"favorite", "favorites", "favourite", "playlist", "playlists", "collection",
+                                           "collections", "library"}, {"userlibrary", "user-library"}),
+    ("Entdecken, Redaktion & Radio", {"discover", "magazine", "radio", "award", "awards", "editorial", "genre",
+                                      "featured", "story"}, {"newreleases", "new-releases"}),
+    ("Suche", {"search"}, set()),
+    ("Konto & Anmeldung", {"login", "logout", "oauth", "account", "signin", "signup", "password"}, set()),
+    ("Einstellungen & Darstellung", {"settings", "setting", "theme", "language", "zoom", "preferences"}, set()),
+    ("Benachrichtigungen", {"notification", "notifications", "notify", "badge"}, set()),
+    ("Updates", {"update", "updates", "upgrade", "updater"}, set()),
+    ("Fehlerberichte & Protokolle", {"log", "logs", "logfile", "sentry", "crash", "report", "diagnostics"}, set()),
+    ("Teilen & soziale Funktionen", {"share", "sharer", "social", "follow"}, set()),
+    ("Videos, Booklets & Zusatzinhalte", {"video", "videos", "booklet", "lyrics", "interviews"}, set()),
+]
+_WORD_SPLIT = re.compile(r"[A-Z]?[a-z]+|[A-Z]+(?![a-z])|\d+")
+
+
+def feature_areas(facts: dict) -> list[tuple[str, int, list[str]]]:
+    """Leitet aus Kanal-, Aktions- und Routennamen (und Oberflächentexten) Funktionsbereiche ab – mit Belegen."""
+    identifiers = list(facts.get("ipc", {})) + list(facts.get("actions", [])) + list(facts.get("api_paths", []))
+    texts = list(facts.get("texts", []))
+    found: dict[str, list[str]] = {}
+    counts: Counter = Counter()
+    for item, is_text in [(i, False) for i in identifiers] + [(t, True) for t in texts]:
+        low = item.lower()
+        words = {w.lower() for w in _WORD_SPLIT.findall(item)}
+        joined = re.sub(r"[^a-z0-9/]", "", low)
+        for label, keys, compounds in AREAS:
+            if words & keys or any(c in low or c.replace("-", "") in joined for c in compounds):
+                counts[label] += 1
+                examples = found.setdefault(label, [])
+                if not is_text and len(examples) < 6 and item not in examples:
+                    examples.append(item)
+    out = []
+    for label, n in counts.most_common():
+        if n >= 2:
+            out.append((label, n, found.get(label) or []))
+    return out
 
 
 def interest(text: str) -> int:
@@ -207,6 +267,11 @@ def group_channels(channels: list[str]) -> list[str]:
 def render(facts: dict, title: str) -> list[Section]:
     """Abschnitte für Bericht und KI-Kontext aus einer (ggf. zusammengefassten) Landkarte."""
     lines = []
+    areas = feature_areas(facts)
+    if areas:
+        lines.append("**Erkannte Funktionsbereiche (abgeleitet aus Kanal-, Aktions-, Routennamen und Texten):**\n"
+                     + "\n".join(f"- {label} ({n} Belege)" + (f": {', '.join(ex)}" if ex else "")
+                                  for label, n, ex in areas))
     if facts.get("ipc"):
         lines.append(f"**IPC-Kanäle Oberfläche ↔ Hauptprozess ({len(facts['ipc'])}), nach Bereich:**\n"
                      + "\n".join(f"- {line}" for line in group_channels(list(facts["ipc"]))))
@@ -240,7 +305,7 @@ def render(facts: dict, title: str) -> list[Section]:
     return sections
 
 
-def merge(maps: list[dict]) -> dict:
+def merge(maps: list[dict], own: set[str] = frozenset()) -> dict:
     out: dict = {}
     for m in maps:
         for key, value in m.items():
@@ -263,18 +328,18 @@ def merge(maps: list[dict]) -> dict:
                 lst = out.setdefault(key, [])
                 lst.extend(v for v in value if v not in lst)
     if "texts" in out:
-        out["texts"] = out["texts"][:40]
+        out["texts"] = sorted(out["texts"], key=lambda t: ui_rank(t, own))[:40]
     if "actions" in out:
         out["actions"] = out["actions"][:120]
     return out
 
 
-def aggregate(result: AnalysisResult) -> None:
+def aggregate(result: AnalysisResult, own: set[str] = frozenset()) -> None:
     """Landkarten aller Dateien einer App zusammenführen – damit die Gesamt-Doku die Funktionen sieht."""
     maps = [n.app_map for n in result.walk() if n is not result and n.app_map]
     if len(maps) < 1 or not result.children:
         return
-    merged = merge(maps)
+    merged = merge(maps, own)
     for sec in render(merged, "Funktionslandkarte der gesamten App"):
         if sec.title != "Funktionslandkarte der gesamten App":
             sec.title += " – gesamte App"

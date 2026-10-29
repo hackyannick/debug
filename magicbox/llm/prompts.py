@@ -67,7 +67,9 @@ def system_prompt(s: Settings) -> str:
         "Endpunkte und Oberflächentexte, um konkrete Funktionen der Anwendung zu benennen (z. B. „Titel herunterladen“ "
         "statt „Netzwerkoperationen“). Minifizierter Code hat verkürzte Variablennamen – stütze dich auf diese "
         "Zeichenketten statt auf die Namen. Steht dort eine Tabelle angesprochener Server, behaupte nicht, es "
-        "gäbe keine Adressen."
+        "gäbe keine Adressen.\n"
+        "11. Gibt es „Erkannte Funktionsbereiche“, gliedere die Beschreibung der Funktionen danach: jeder Bereich "
+        "ein Punkt, in eigenen Worten erklärt, mit 1–2 Belegen (Kanal-/Aktionsname) – die wichtigsten zuerst."
     )
 
 
