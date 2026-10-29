@@ -51,11 +51,34 @@ die dein Netzwerk verlassen.
 
 ## Schnellstart
 
-### Server auf dem R640 (empfohlen)
+### Easy Setup (empfohlen)
+
+Ein Skript fragt alles Nötige ab, schlägt sinnvolle Werte vor und prüft am Ende selbst, ob alles läuft:
+
+**Mit Ory-Anmeldung** (Gateway mit nginx + Hydra/Kratos, Analyse auf dem R640):
 
 ```bash
-git clone <dieses-repo> magicbox && cd magicbox
+sudo ./scripts/easy-setup.sh gateway      # auf dem Gateway: Hydra-Client, nginx + Zertifikat, Gruppe
 ```
+
+```bash
+scp magicbox-setup.env <benutzer>@<r640>:~/magicbox/
+```
+
+```bash
+sudo ./scripts/easy-setup.sh server --env magicbox-setup.env   # auf dem R640: alles andere
+```
+
+**Ohne Ory** (ein Rechner, Zugangsschlüssel):
+
+```bash
+sudo ./scripts/easy-setup.sh solo
+```
+
+`--dry-run` zeigt nur an, was passieren würde; ein zweiter Lauf übernimmt die gespeicherten Antworten.
+Für die Gateway-Rolle reicht die einzelne Datei `scripts/easy-setup.sh`.
+
+### Server von Hand installieren
 
 ```bash
 sudo ./scripts/install_server.sh --model qwen3-coder:30b
@@ -66,7 +89,8 @@ gesperrten systemd-Dienst ein und zeigt am Ende die URL mit Zugangsschlüssel. O
 – nur die Magic Box (Port 8765) ist im LAN erreichbar.
 
 **Ganz ohne Internet?** Auf einem Online-Rechner `./scripts/make_offline_bundle.sh` ausführen, das Paket
-rüberkopieren und `install_server.sh --offline` nutzen. Details: [docs/R640-LLM-Setup.md](docs/R640-LLM-Setup.md).
+rüberkopieren und `install_server.sh --offline` (bzw. `easy-setup.sh server` im entpackten Bundle) nutzen.
+Details: [docs/R640-LLM-Setup.md](docs/R640-LLM-Setup.md).
 
 ### Desktop-App
 
@@ -151,5 +175,5 @@ magicbox/
 ├── web/         Oberfläche (HTML/CSS/JS, ohne Abhängigkeiten)
 ├── gui/         Desktop-App (Qt WebEngine)
 ├── engine.py · pipeline.py · tools.py · cli.py
-scripts/         install_server.sh · make_offline_bundle.sh · magicbox-server.service · Startskripte
+scripts/         easy-setup.sh · install_server.sh · make_offline_bundle.sh · magicbox-server.service · Startskripte
 ```

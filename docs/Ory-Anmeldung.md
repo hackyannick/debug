@@ -17,6 +17,12 @@ Einstellungen stehen in `/etc/magicbox/settings.json` (bewusst nicht über die W
 
 ## OIDC gegen Hydra (empfohlen)
 
+> **Schnellweg:** `scripts/easy-setup.sh` erledigt die Schritte 1–5 unten automatisch:
+> `sudo ./easy-setup.sh gateway` auf hb-s-shieldy, die erzeugte `magicbox-setup.env` auf den R640 kopieren,
+> dort `sudo ./scripts/easy-setup.sh server --env magicbox-setup.env`. Anmeldemethode und Scopes liest das Skript
+> direkt aus Hydra; am Ende prüft es Discovery, JWKS, Token-Endpunkt und die Login-Weiterleitung.
+> Die folgenden Abschnitte beschreiben, was dabei passiert – zum Nachvollziehen oder für die Einrichtung von Hand.
+
 ### Aufbau
 
 ```
