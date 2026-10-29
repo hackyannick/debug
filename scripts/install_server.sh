@@ -168,11 +168,20 @@ if [ "$WITH_DOTNET" = 1 ] && command -v dotnet >/dev/null; then
     SRC_ARGS=()
     [ -n "$OFFLINE" ] && SRC_ARGS=(--add-source "$OFFLINE/nuget")
     chown -R magicbox: "$HOME_DIR/.dotnet"
-    DOTNET_ENV=(DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1)
+    DOTNET_ENV=(HOME="$HOME_DIR" DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1
+                DOTNET_ROLL_FORWARD=Major)
     if [ -x "$DOTNET_DIR/dotnet" ]; then DOTNET_ENV+=(DOTNET_ROOT="$DOTNET_DIR"); fi
-    runuser -u magicbox -- env HOME="$HOME_DIR" "${DOTNET_ENV[@]}" \
-        dotnet tool install -g ilspycmd --version "$ILSPY_VERSION" "${SRC_ARGS[@]}" \
-        || warn "ilspycmd nicht installiert – .NET wird nur über Metadaten analysiert."
+    ILSPY_BIN="$HOME_DIR/.dotnet/tools/ilspycmd"
+    # Im Home des Dienstkontos ausführen: dotnet sucht im aktuellen Ordner nach Projektdateien,
+    # und magicbox darf z. B. /root nicht lesen ("Access to the path '/root/…' is denied").
+    if (cd "$HOME_DIR" && runuser -u magicbox -- env "${DOTNET_ENV[@]}" "$ILSPY_BIN" --version) >/dev/null 2>&1; then
+        echo "ilspycmd ist bereits installiert."
+    elif (cd "$HOME_DIR" && runuser -u magicbox -- env "${DOTNET_ENV[@]}" \
+            dotnet tool install -g ilspycmd --version "$ILSPY_VERSION" "${SRC_ARGS[@]}"); then
+        echo "ilspycmd installiert."
+    else
+        warn "ilspycmd nicht installiert – .NET wird nur über Metadaten analysiert."
+    fi
 fi
 
 # ------------------------------------------------------------------ Ollama
