@@ -80,6 +80,8 @@ class PEAnalyzer(Analyzer):
         result.add(Section("PE-Header", kv=kv, llm_priority=0))
         if oh.DATA_DIRECTORY[4].Size:
             result.product["Digitale Signatur"] = "vorhanden (Authenticode, Gültigkeit nicht geprüft)"
+            # Zertifikatsdaten (Dateioffset!) – deren URLs (OCSP, CRL) gehören nicht zum Programm
+            ctx.facts["cert_range"] = (oh.DATA_DIRECTORY[4].VirtualAddress, oh.DATA_DIRECTORY[4].Size)
 
         self._version_info(pe, result)
         self._sections(pe, result)

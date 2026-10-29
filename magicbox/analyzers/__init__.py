@@ -14,6 +14,7 @@ from .dotnet import DotNetAnalyzer, OfficeMacroAnalyzer
 from .elf import ELFAnalyzer
 from .identify import IdentifyAnalyzer
 from .installer import InstallerAnalyzer
+from .jsbundle import JSBundleAnalyzer
 from .iocs import IOCAnalyzer
 from .java import JavaClassAnalyzer
 from .macho import MachOAnalyzer
@@ -35,6 +36,7 @@ ANALYZERS = [
     JavaClassAnalyzer(),
     PDFAnalyzer(),
     SourceAnalyzer(),
+    JSBundleAnalyzer(),  # nach SourceAnalyzer (nutzt die erkannte Sprache)
     OfficeMacroAnalyzer(),
     StringsAnalyzer(),
     DeobfuscationAnalyzer(),

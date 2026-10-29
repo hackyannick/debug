@@ -137,7 +137,11 @@ class StringsAnalyzer(Analyzer):
     kinds = ("pe", "elf", "macho", "dos", "unknown", "java-class", "dex", "wasm", "pyc", "ole", "sqlite", "pdf")
 
     def analyze(self, ctx: Context, result: AnalysisResult) -> None:
-        strings = extract_strings(ctx.data)
+        data = ctx.data
+        cert = ctx.facts.get("cert_range")
+        if cert and 0 < cert[0] < len(data):  # Signatur ausblenden (DigiCert-OCSP-URLs usw.)
+            data = data[:cert[0]] + data[cert[0] + cert[1]:]
+        strings = extract_strings(data)
         useful = [s for s in strings if not _is_noise(s)]
         ctx.facts["strings"] = useful
         cats = classify(useful)

@@ -25,6 +25,32 @@ SUSPICIOUS = [
      "Hart kodierte Zugangsdaten"),
 ]
 
+# Software-Profil: neutrale Beschreibung statt Verdachtsmustern
+TECHNIQUES = [
+    (re.compile(r"DownloadString|DownloadFile|Invoke-WebRequest|urllib\.request|requests\.(get|post)|fetch\(|"
+                r"XMLHttpRequest|axios|https?\.request|net\.request|WebSocket\(", re.I), "Netzwerkzugriffe (HTTP/WebSocket)"),
+    (re.compile(r"subprocess|os\.system|child_process|Runtime\.getRuntime\(\)\.exec|ShellExecute|WScript\.Shell", re.I),
+     "Startet andere Programme/Prozesse"),
+    (re.compile(r"\bfs\.(?:read|write|unlink|mkdir|rename|copy|stat|exists)|open\(|File\.(?:Read|Write)", re.I),
+     "Datei-Zugriffe"),
+    (re.compile(r"\bcrypto\.|createHash|createCipher|subtle\.|hashlib|Cipher\b", re.I), "Kryptografie/Hashing"),
+    (re.compile(r"localStorage|indexedDB|sqlite|\.db\b|Database\(", re.I), "Lokale Datenspeicherung"),
+    (re.compile(r"Worker\(|worker_threads|Thread\(|threading\.", re.I), "Nebenläufigkeit (Worker/Threads)"),
+]
+MINIFIED_LINE = 2000
+
+
+def beautify(text: str) -> str:
+    """Grober Zeilenumbruch für minifizierten Code (nach ; { }) – nur zum Lesen, kein exakter Formatierer."""
+    out = []
+    for line in text.splitlines():
+        if len(line) <= MINIFIED_LINE:
+            out.append(line)
+            continue
+        out.append(re.sub(r"([;{}])(?=\S)", "\\1\n", line))
+    return "\n".join(out)
+
+
 OUTLINE_PATTERNS = {
     "javascript": re.compile(r"^\s*(?:export\s+)?(?:async\s+)?(?:function\s+(\w+)|class\s+(\w+)|(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s*)?\()", re.M),
     "typescript": re.compile(r"^\s*(?:export\s+)?(?:async\s+)?(?:function\s+(\w+)|class\s+(\w+)|interface\s+(\w+))", re.M),
@@ -96,8 +122,13 @@ class SourceAnalyzer(Analyzer):
         lang = source_language(ctx.data, ctx.path.name) or "text"
         lines = text.splitlines()
         ctx.facts["language"] = lang
-        kv = {"Sprache": lang, "Zeilen": str(len(lines)),
-              "Längste Zeile": f"{max((len(l) for l in lines), default=0)} Zeichen"}
+        longest = max((len(l) for l in lines), default=0)
+        minified = longest > MINIFIED_LINE and len(text) > 20_000
+        ctx.facts["minified"] = minified
+        kv = {"Sprache": lang, "Zeilen": str(len(lines)), "Längste Zeile": f"{longest} Zeichen"}
+        if minified:
+            kv["Form"] = ("minifiziert/gebündelt (z. B. webpack) – unten zur Lesbarkeit umbrochen; "
+                          "Variablennamen sind verkürzt, Zeichenketten und API-Namen bleiben erhalten")
 
         imports: list[str] = []
         outline: list[str] = []
@@ -121,6 +152,19 @@ class SourceAnalyzer(Analyzer):
             result.add(Section("Struktur (Klassen & Funktionen)", code="\n".join(outline[:400]),
                                code_lang=lang, llm_priority=1))
 
+        if result.profile == "allgemein":
+            used = []
+            for rx, label in TECHNIQUES:
+                n = len(rx.findall(text))
+                if n:
+                    used.append([label, str(n)])
+            if used:
+                result.add(Section("Verwendete Techniken", table=Table(["Technik", "Fundstellen"], used),
+                                   llm_priority=0))
+            result.add(Section("Quelltext (zur Lesbarkeit umbrochen)" if minified else "Quelltext",
+                               code=beautify(text) if minified else text, code_lang=lang, llm_priority=2))
+            return
+
         hits = []
         for rx, sev, label in SUSPICIOUS:
             matches = list(rx.finditer(text))
@@ -135,7 +179,8 @@ class SourceAnalyzer(Analyzer):
         if lines and max(len(l) for l in lines) > 5000 and len(lines) < 20:
             result.find("medium", "Minifiziert oder obfuskiert", "Extrem lange Zeilen – Code wurde vermutlich verschleiert/minifiziert.")
 
-        result.add(Section("Quelltext", code=text, code_lang=lang, llm_priority=2))
+        result.add(Section("Quelltext (zur Lesbarkeit umbrochen)" if minified else "Quelltext",
+                           code=beautify(text) if minified else text, code_lang=lang, llm_priority=2))
 
 
 class PDFAnalyzer(Analyzer):

@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import math
+import posixpath
 import re
 import time
 from typing import Callable
 
+from magicbox.analyzers.jsbundle import interest
 from magicbox.analyzers.runtime import is_shell
 from magicbox.config import Settings
 from magicbox.model import AnalysisResult, Section
@@ -179,39 +181,67 @@ class Documenter:
             # Code aus Electron-Archiven (app.asar) liegt oft tiefer, z. B. Installer → Paket → app.asar → *.js
             candidates = list(result.children) + [g for node in result.walk() if node is not result and
                                                   node.kind == "asar" for g in node.children]
-            interesting = [c for c in candidates if (c.kind not in BORING_KINDS or c.findings)]
             software = self.s.profile == "allgemein"
+            interesting = [c for c in candidates if (c.kind not in BORING_KINDS or c.findings)
+                           and not (software and c.kind == "unknown" and not c.findings)]
 
             def rank(c: AnalysisResult) -> tuple:
                 serious = len([f for f in c.findings if f.severity in ("high", "medium")])
                 code_first = c.kind == "source" if software else c.kind != "source"
                 return (-serious, is_shell(c), c.kind != "asar", not code_first, -c.size)
             interesting.sort(key=rank)
-            self.planned = self.calls + len(interesting[: self.s.max_llm_children]) + 1
-            for child in interesting[: self.s.max_llm_children]:
-                facts = facts_text(child, int(budget * 0.8))
-                summary = self._ask(prompts.child_notes_prompt(child.name, facts, self.s.profile == "malware"),
-                                    f"Teil-Analyse: {child.name}")
-                child.llm_doc = summary
-                notes.append(f"### {child.name} ({child.description})\n{summary}")
+            selected = group_small(interesting)[: self.s.max_llm_children]
+            # Große Code-Dateien (Bundles): zusätzlich die aufschlussreichsten Teile einzeln lesen lassen
+            big = [item for item, _ in selected if len(code_material(item)) > budget]
+            chunk_budget = self.s.max_code_chunks
+            per_big = max(1, chunk_budget // len(big)) if big else 0
+            self.planned = self.calls + len(selected) + min(chunk_budget, per_big * len(big)) + 1
+            for item, members in selected:
+                code_notes = ""
+                if item in big and chunk_budget > 0:
+                    take = min(per_big, chunk_budget)
+                    code_notes, used = self._chunk_notes(item, budget, take)
+                    chunk_budget -= used
+                facts = facts_text(item, int(budget * (0.5 if code_notes else 0.8)), include_code=not code_notes)
+                if code_notes:
+                    facts += "\n\n### Zusammenfassungen der aufschlussreichsten Code-Teile\n" + code_notes
+                summary = self._ask(prompts.child_notes_prompt(item.name, facts, self.s.profile == "malware"),
+                                    f"Teil-Analyse: {item.name}")
+                if members:
+                    members[0].llm_doc = (f"*Gemeinsame Einschätzung für {len(members)} Dateien "
+                                          f"({', '.join(m.name for m in members[:12])}{' …' if len(members) > 12 else ''}):*"
+                                          f"\n\n{summary}")
+                else:
+                    item.llm_doc = summary
+                notes.append(f"### {item.name} ({item.description})\n{summary}")
             return "\n\n".join(notes)
 
         code = code_material(result)
         full = facts_text(result, budget * 10)
         if len(full) <= budget or not code:
             return ""  # passt komplett in den Kontext
+        self.planned = self.calls + min(self.s.max_code_chunks, 1 + len(code) // max(1, budget // 2)) + 1
+        text, _ = self._chunk_notes(result, budget, self.s.max_code_chunks)
+        return text
+
+    def _chunk_notes(self, result: AnalysisResult, budget: int, limit: int) -> tuple[str, int]:
+        """Code in Teile zerlegen; passen nicht alle, die aufschlussreichsten wählen (Endpunkte, IPC, Aktionen …)."""
+        code = code_material(result)
         context = facts_text(result, 1500, include_code=False)
-        chunks = split_chunks(code, int(budget * 0.75) - len(context))
-        if len(chunks) > self.s.max_code_chunks:
-            self.log(f"Code hat {len(chunks)} Teile – nur die ersten {self.s.max_code_chunks} werden einzeln gelesen.")
-            chunks = chunks[: self.s.max_code_chunks]
-        self.planned = self.calls + len(chunks) + 1
-        for i, chunk in enumerate(chunks, 1):
-            summary = self._ask(prompts.code_notes_prompt(result.name, i, len(chunks), chunk, context,
+        chunks = split_chunks(code, max(2000, int(budget * 0.75) - len(context)))
+        picked = list(range(len(chunks)))
+        if len(chunks) > limit:
+            ranked = sorted(picked, key=lambda i: (-interest(chunks[i]), i))[:limit]
+            picked = sorted(ranked)
+            self.log(f"{result.name}: Code hat {len(chunks)} Teile – die {limit} aufschlussreichsten werden "
+                     f"einzeln gelesen (Teile {', '.join(str(i + 1) for i in picked)}).")
+        notes = []
+        for i in picked:
+            summary = self._ask(prompts.code_notes_prompt(result.name, i + 1, len(chunks), chunks[i], context,
                                                           self.s.profile == "malware"),
-                                f"Code-Teil {i}/{len(chunks)} zusammenfassen")
-            notes.append(f"### Code-Teil {i}\n{summary}")
-        return "\n\n".join(notes)
+                                f"{result.name}: Code-Teil {i + 1}/{len(chunks)} zusammenfassen")
+            notes.append(f"#### Code-Teil {i + 1} von {len(chunks)}\n{summary}")
+        return "\n\n".join(notes), len(picked)
 
     # ------------------------------------------------------------------ Eigene Fragen
     def answer(self, result: AnalysisResult, question: str, reserve: int = 0) -> str:
@@ -262,6 +292,41 @@ def verification_note(result: AnalysisResult, text: str) -> str:
         return ""
     return ("\n\n> ⚠️ **Gegenprüfung der Magic Box:** " + ", ".join(f"`{d}`" for d in unknown) +
             " kommt in den Analysedaten nicht vor – diese Angabe der KI ist vermutlich falsch.")
+
+
+GROUP_MAX_SIZE = 8 * 1024
+
+
+def group_small(children: list[AnalysisResult]) -> list[tuple[AnalysisResult, list[AnalysisResult]]]:
+    """Viele kleine Dateien gleicher Art (z. B. 9 SQL-Migrationen) zu einer gemeinsamen Teil-Analyse bündeln.
+    Liefert (Eintrag, Mitglieder) – Mitglieder leer bei Einzeldateien; Reihenfolge wie übergeben."""
+    buckets: dict[tuple[str, str], list[AnalysisResult]] = {}
+    for c in children:
+        if c.kind == "source" and c.size <= GROUP_MAX_SIZE and not c.findings:
+            key = (posixpath.dirname(c.name), posixpath.splitext(c.name)[1].lower())
+            buckets.setdefault(key, []).append(c)
+    groups = {k: v for k, v in buckets.items() if len(v) >= 3}
+    out, done = [], set()
+    for c in children:
+        key = (posixpath.dirname(c.name), posixpath.splitext(c.name)[1].lower())
+        if key in groups:
+            if key in done:
+                continue
+            done.add(key)
+            members = groups[key]
+            folder, ext = key
+            combined = AnalysisResult(path=folder, name=f"{folder + '/' if folder else ''}*{ext} ({len(members)} Dateien)",
+                                      size=sum(m.size for m in members), kind="source",
+                                      description=f"{len(members)} kleine {ext or 'Text'}-Dateien", profile=c.profile)
+            code = "\n\n".join(f"-- Datei: {m.name}\n" + next((s.code for s in m.sections if s.code and
+                                                                   s.title.startswith("Quelltext")), "")
+                                for m in members)
+            combined.add(Section("Inhalt der Dateien", code=code, code_lang=members[0].sections[-1].code_lang
+                                 if members[0].sections else "", llm_priority=0))
+            out.append((combined, members))
+        else:
+            out.append((c, []))
+    return out
 
 
 def code_units(result: AnalysisResult, size: int = 2400) -> list[tuple[str, str, str]]:

@@ -25,6 +25,7 @@ SEV_ICON = {"high": "🔴", "medium": "🟠", "low": "🟡", "info": "🔵"}
 SEV_NAME = {"high": "hoch", "medium": "mittel", "low": "niedrig", "info": "Info"}
 SEV_ORDER = {"high": 0, "medium": 1, "low": 2, "info": 3}
 MAX_CODE_LINES = 400
+MAX_LINE_CHARS = 400  # minifizierte Riesenzeilen im Bericht kürzen (vollständig in analysis.json)
 
 
 @dataclass
@@ -58,7 +59,8 @@ def _section_md(sec: Section, level: int) -> str:
         out += [sec.text, ""]
     if sec.code:
         lines = sec.code.splitlines()
-        code = "\n".join(lines[:MAX_CODE_LINES]).replace("```", "``\u200b`")
+        code = "\n".join(l if len(l) <= MAX_LINE_CHARS else l[:MAX_LINE_CHARS] + " …"
+                         for l in lines[:MAX_CODE_LINES]).replace("```", "``\u200b`")
         out += [f"```{sec.code_lang}", code, "```"]
         if len(lines) > MAX_CODE_LINES:
             out.append(f"*… {len(lines) - MAX_CODE_LINES} weitere Zeilen (vollständig in analysis.json).*")

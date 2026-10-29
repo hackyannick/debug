@@ -19,6 +19,7 @@ from .base import Analyzer, Context, clip
 from .libs import describe, library_of
 
 SEP = "---MAGICBOX-FN---"
+UNNAMED = ("fcn.", "sub.", "loc.", "entry")
 BORING = ("sym.imp.", "loc.imp.", "sym._init", "sym._fini", "sym.deregister_tm_clones", "sym.register_tm_clones",
           "sym.__do_global_dtors_aux", "sym.frame_dummy", "sym.__libc_csu", "sym._start", "entry.init", "entry.fini")
 
@@ -89,17 +90,19 @@ class Radare2Analyzer(Analyzer):
                     libs[lib] = libs.get(lib, 0) + 1
                 else:
                     own.append(f)
-            rows = [[f["name"], hex(f["addr"]), str(f["realsz"]), str(f.get("nbbs", "")),
-                     str(len(f.get("callrefs", []) or []))]
-                    for f in sorted(own, key=lambda f: -f["realsz"])[:300]]
-            text = ""
+            # Tabelle nur mit benannten Funktionen – fcn.<adresse> sagt im Bericht nichts aus
+            named = [f for f in own if not f["name"].startswith(UNNAMED)]
+            rows = [[f["name"], hex(f["addr"]), str(f["realsz"]), str(f.get("nbbs", ""))]
+                    for f in sorted(named, key=lambda f: -f["realsz"])[:150]]
+            notes = [f"{len(own) - len(named)} weitere Funktionen ohne Namen (fcn.*, z. B. durch entfernte Symbole) "
+                     "sind nicht aufgeführt."] if len(own) > len(named) else []
             if libs:
                 from collections import Counter
-                text = (f"Ohne {sum(libs.values())} Funktionen bekannter Bibliotheken ({describe(Counter(libs))}) – "
-                        "diese gehören nicht zur eigentlichen Programmlogik.")
-            result.add(Section(f"Funktionen (radare2, {len(funcs)} erkannt, {len(own)} eigene bzw. unbenannte)",
-                               table=Table(["Name", "Adresse", "Größe (Bytes)", "Blöcke", "Aufrufe"], rows,
-                                           total=len(own)), text=text, llm_priority=2))
+                notes.append(f"Ohne {sum(libs.values())} Funktionen bekannter Bibliotheken ({describe(Counter(libs))}) – "
+                             "diese gehören nicht zur eigentlichen Programmlogik.")
+            result.add(Section(f"Funktionen (radare2, {len(funcs)} erkannt, {len(named)} benannte eigene)",
+                               table=Table(["Name", "Adresse", "Größe (Bytes)", "Blöcke"], rows, total=len(named))
+                               if rows else None, text=" ".join(notes), llm_priority=2))
 
             targets = self._pick(own, ctx.settings.max_disasm_functions)
             cmds = [level] + [f"?e {SEP}{f['name']}@{f['addr']:#x};pdc @ {f['addr']}" for f in targets]
@@ -127,5 +130,7 @@ class Radare2Analyzer(Analyzer):
         by_name = {f["name"]: f for f in funcs}
         picked = [by_name[n] for n in ("main", "sym.main", "entry0", "sym.WinMain", "sym._main", "sym.DllMain")
                   if n in by_name]
-        rest = sorted((f for f in funcs if f not in picked), key=lambda f: -f.get("realsz", 0))
+        # benannte Funktionen zuerst (aussagekräftiger), dann nach Größe
+        rest = sorted((f for f in funcs if f not in picked),
+                      key=lambda f: (f.get("name", "").startswith(UNNAMED), -f.get("realsz", 0)))
         return (picked + rest)[:limit]

@@ -5,6 +5,7 @@ from __future__ import annotations
 import bz2
 import gzip
 import io
+import json
 import lzma
 import os
 import re
@@ -17,7 +18,7 @@ import zlib
 from magicbox import tools
 from magicbox.model import AnalysisResult, Section, Table
 
-from .asar import is_electron, modules_table, node_app_root, package_info, rank, wanted
+from .asar import first_party, is_electron, is_own, modules_table, node_app_root, package_info, rank, wanted
 from .base import Analyzer, Context, human_size
 from .strings import extract_strings
 
@@ -42,6 +43,18 @@ def _container_type(names: set[str]) -> str | None:
     if "manifest.json" in names and any(n.endswith(".js") for n in names):
         return "Browser-Erweiterung / Web-Paket"
     return None
+
+
+# require("electron") / from "electron" – auch minifiziert (z. B. require("electron") mitten in einem Bundle)
+ELECTRON_RE = re.compile(rb"""require\(\s*['"`]electron['"`]\s*\)|from\s*['"`]electron['"`]|\bipcMain\b|\bBrowserWindow\b""")
+
+
+def _load_json(blob: bytes | None) -> dict:
+    try:
+        data = json.loads(blob.decode("utf-8-sig")) if blob else {}
+    except (ValueError, UnicodeDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
 
 
 def _rmtree(path: str) -> None:
@@ -142,9 +155,17 @@ class ArchiveAnalyzer(Analyzer):
         ctype = _container_type(names) if result.kind == "zip" else None
         if ctype:
             result.description = ctype
-        rows = [[n, human_size(sz)] for n, sz, _ in members[:500]]
-        result.add(Section(f"Inhalt ({len(members)} Einträge)",
-                           table=Table(["Pfad", "Größe"], rows, total=len(members)), llm_priority=1))
+        app_root = node_app_root([m[0] for m in members])
+        listed, note = members, ""
+        if app_root is not None:  # App-Ordner: Fremdpakete nur zählen, nicht einzeln auflisten
+            mine = first_party(_load_json(next((d for n, _, d in members if n == app_root + "package.json"), None)))
+            listed = [m for m in members if is_own(m[0], mine)]
+            if len(listed) < len(members):
+                note = (f"Ohne {len(members) - len(listed)} Dateien fremder npm-Pakete (node_modules) – "
+                        "Name und Version siehe „Verwendete npm-Pakete“.")
+        rows = [[n, human_size(sz)] for n, sz, _ in listed[:500]]
+        result.add(Section(f"Inhalt ({len(listed)} Einträge)", text=note,
+                           table=Table(["Pfad", "Größe"], rows, total=len(listed)), llm_priority=1))
 
         if ctype == "Android-App (APK)":
             manifest = next((d for n, _, d in members if n == "AndroidManifest.xml" and d), None)
@@ -160,7 +181,6 @@ class ArchiveAnalyzer(Analyzer):
         if any(n.lower().endswith("vbaproject.bin") for n in names):
             result.find("high", "Office-Makros (VBA) enthalten", "Das Dokument enthält VBA-Makros.")
 
-        app_root = node_app_root([m[0] for m in members])
         if app_root is not None:
             members = self._node_app(members, app_root, result)
 
@@ -177,19 +197,37 @@ class ArchiveAnalyzer(Analyzer):
                 result.children.append(child)
 
     @staticmethod
+    def _first_party_zip(zf: zipfile.ZipFile, root: str | None) -> set[str]:
+        if root is None:
+            return set()
+        for info in zf.infolist():
+            if info.filename.replace("\\", "/") == root + "package.json" and info.file_size < 1024 * 1024:
+                try:
+                    return first_party(_load_json(zf.read(info)))
+                except (zipfile.BadZipFile, RuntimeError, NotImplementedError, OSError, zlib.error):
+                    return set()
+        return set()
+
+    @staticmethod
     def _node_app(members: list, root: str, result: AnalysisResult) -> list:
         """Ausgepackte Electron-/Node.js-App (z. B. resources/app): Steckbrief, npm-Pakete, eigener Code zuerst."""
         by_name = {n: d for n, _, d in members}
         pkg = package_info(by_name.get(root + "package.json"), result)
         uses_electron = is_electron(pkg) or any(
             d and n.endswith((".js", ".cjs", ".mjs")) and "node_modules/" not in n and
-            re.search(rb"""require\(\s*['"]electron['"]\s*\)|from\s+['"]electron['"]""", d[:2_000_000])
+            ELECTRON_RE.search(d[:64 * 1024 * 1024])
             for n, _, d in members)
         result.description = "Electron-App (Programmordner)" if uses_electron else "Node.js-Projekt (Ordner)"
-        modules_table([(n, d) for n, _, d in members if "node_modules/" in n and d is not None], pkg, result)
+        mine = first_party(pkg)
+        modules_table([(n, d) for n, _, d in members if "node_modules/" in n and d is not None and
+                       n.endswith("package.json") and not is_own(n, mine)], pkg, result)
         main = os.path.normpath(pkg.get("main", "index.js")).replace(os.sep, "/") if pkg else "index.js"
-        own = [m for m in members if "node_modules/" not in m[0]]
+        own = [m for m in members if is_own(m[0], mine)]
         skipped = len(members) - len(own)
+        if mine:
+            result.add(Section("Eigene Pakete in node_modules", text=", ".join(sorted(mine)) +
+                               " – gehören zur App (gleicher Name/Hersteller) und werden wie eigener Code analysiert.",
+                               llm_priority=0))
         if skipped:
             result.find("info", "Fremdbibliotheken nur aufgelistet",
                         f"{skipped} Dateien in node_modules wurden nicht einzeln analysiert (Versionen siehe npm-Pakete).")
@@ -216,11 +254,12 @@ class ArchiveAnalyzer(Analyzer):
         with zipfile.ZipFile(io.BytesIO(ctx.data)) as zf:
             # Windows PowerShell 5 (Compress-Archive) schreibt Backslashes als Pfadtrenner
             app_root = node_app_root([i.filename.replace("\\", "/") for i in zf.infolist()])
+            mine = self._first_party_zip(zf, app_root)
             for info in zf.infolist():
                 if info.is_dir() or info.filename.endswith("\\"):
                     continue
                 name = info.filename.replace("\\", "/")
-                if app_root is not None and not wanted(name):
+                if app_root is not None and not wanted(name, mine):
                     out.append((name, info.file_size, None))  # node_modules & Medien: nur auflisten
                     continue
                 data = None
@@ -300,13 +339,21 @@ class ArchiveAnalyzer(Analyzer):
                     full = os.path.join(dirpath, fn)
                     found.append((os.path.relpath(full, outdir).replace(os.sep, "/"), full))
             app_root = node_app_root([rel for rel, _ in found])
+            mine: set[str] = set()
+            if app_root is not None:
+                manifest = dict(found).get(app_root + "package.json")
+                try:
+                    with open(manifest, "rb") as f:
+                        mine = first_party(json.loads(f.read().decode("utf-8-sig")))
+                except (OSError, TypeError, ValueError, UnicodeDecodeError, AttributeError):
+                    mine = set()
             for rel, full in found:
                 if os.path.islink(full):
                     out.append((f"{rel} -> (Symlink)", 0, None))
                     continue
                 size = os.path.getsize(full)
                 data = None
-                if app_root is not None and not wanted(rel):
+                if app_root is not None and not wanted(rel, mine):
                     out.append((rel, size, None))
                     continue
                 if read_count < max_members and total + size <= limit:

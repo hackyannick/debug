@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import posixpath
+import re
 import struct
 
 from magicbox.model import AnalysisResult, Section, Table
@@ -15,8 +16,8 @@ from magicbox.model import AnalysisResult, Section, Table
 from .base import Analyzer, Context, clip, human_size
 
 CODE_EXT = (".js", ".mjs", ".cjs", ".ts", ".jsx", ".tsx", ".html", ".htm", ".json", ".vue", ".svelte", ".css", ".node")
-SKIP_EXT = (".map", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".woff", ".woff2", ".ttf", ".otf", ".mp3",
-            ".wav", ".ogg", ".mp4", ".webm")
+SKIP_EXT = (".map", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".icns", ".woff", ".woff2", ".ttf", ".otf",
+            ".eot", ".mp3", ".wav", ".ogg", ".mp4", ".webm", ".lottie")
 
 
 def parse(data: bytes) -> tuple[dict, int]:
@@ -62,16 +63,18 @@ class AsarAnalyzer(Analyzer):
             result.errors.append(f"ASAR nicht lesbar: {exc}")
             return
         entries = list(walk(header))
-        own = [(p, e) for p, e in entries if "node_modules/" not in f"/{p}"]
-        modules = [(p, e) for p, e in entries if "node_modules/" in f"/{p}"]
         unpacked = [p for p, e in entries if e.get("unpacked")]
-
         entry = dict(entries).get("package.json")
         pkg = package_info(read(ctx.data, base, entry) if entry else None, result)
+        mine = first_party(pkg)
+        own = [(p, e) for p, e in entries if is_own(p, mine)]
+        modules = [(p, e) for p, e in entries if "node_modules/" in f"/{p}"]
         main = posixpath.normpath(pkg.get("main", "index.js")) if pkg else "index.js"
 
         kv = {"Dateien gesamt": str(len(entries)), "Eigene Dateien": str(len(own)),
               "Fremdbibliotheken (node_modules)": str(len(modules))}
+        if mine:
+            kv["Eigene Pakete in node_modules"] = ", ".join(sorted(mine))
         if unpacked:
             kv["Ausgelagert (app.asar.unpacked)"] = f"{len(unpacked)} Datei(en), z. B. {clip(', '.join(unpacked[:5]), 200)}"
         result.add(Section("ASAR-Archiv (Electron-App)", kv=kv, llm_priority=0))
@@ -123,11 +126,53 @@ def node_app_root(names) -> str | None:
     return min(roots, key=lambda r: (r.count("/"), len(r))) if roots else None
 
 
-def wanted(name: str) -> bool:
-    """Was aus einem App-Ordner gelesen werden soll: eigene Dateien und die Steckbriefe der npm-Pakete."""
-    if "node_modules/" in name:
+def package_of(path: str) -> str | None:
+    """npm-Paket, in dem eine Datei liegt (erste node_modules-Ebene), sonst None."""
+    if "node_modules/" not in path:
+        return None
+    parts = path.split("node_modules/", 1)[1].split("/")
+    return "/".join(parts[:2]) if parts[0].startswith("@") and len(parts) > 1 else parts[0]
+
+
+GENERIC_WORDS = {"app", "apps", "desktop", "electron", "client", "player", "music", "corp", "gmbh", "inc", "ltd",
+                 "software", "studio", "team", "labs", "tech", "node", "core", "main", "web"}
+
+
+def first_party(pkg: dict) -> set[str]:
+    """Eigene Pakete der App, z. B. @qobuz/qobuz-dwp-ui bei der App „Qobuz“ (gleicher Name/Scope)."""
+    if not pkg:
+        return set()
+    author = pkg.get("author")
+    author = author.get("name", "") if isinstance(author, dict) else str(author or "")
+    names = [str(v).lower() for v in (pkg.get("name"), pkg.get("productName"), author) if v]
+    tokens = {re.sub(r"[^a-z0-9]", "", n) for n in names}
+    tokens |= {w for n in names for w in re.split(r"[^a-z0-9]+", n) if len(w) >= 4 and w not in GENERIC_WORDS}
+    tokens = {t for t in tokens if len(t) >= 3}
+    deps = {**(pkg.get("dependencies") or {}), **(pkg.get("optionalDependencies") or {})}
+    own = set()
+    for dep in deps:
+        head = dep[1:].split("/")[0] if dep.startswith("@") else dep
+        base = re.sub(r"[^a-z0-9]", "", head.lower())
+        if any(base == t or base.startswith(t) for t in tokens):
+            own.add(dep)
+    return own
+
+
+def is_own(path: str, mine: set[str] = frozenset()) -> bool:
+    """Eigener Code: außerhalb von node_modules oder in einem eigenen Paket (ohne dessen eigene node_modules)."""
+    if "node_modules/" not in path:
+        return True
+    return path.count("node_modules/") == 1 and package_of(path) in mine
+
+
+def wanted(name: str, mine: set[str] = frozenset()) -> bool:
+    """Was aus einem App-Ordner gelesen werden soll: eigener Code und die Steckbriefe der npm-Pakete."""
+    if "node_modules/" in name and not is_own(name, mine):
         return is_manifest(name)
-    return not name.lower().endswith(SKIP_EXT)
+    low = name.lower()
+    if "node_modules/" in name and low.endswith((".css", ".txt", ".md")):
+        return False  # in eigenen Paketen zählt der Code, nicht Stylesheets/Lizenztexte
+    return not low.endswith(SKIP_EXT)
 
 
 def package_info(blob: bytes | None, result: AnalysisResult) -> dict:

@@ -62,7 +62,11 @@ def system_prompt(s: Settings) -> str:
         "8. „TLS-Callbacks“ bedeutet Thread Local Storage, nicht TLS/SSL-Verschlüsselung.\n"
         "9. Funktionen bekannter Laufzeitumgebungen und Bibliotheken (V8, Node.js, Chromium, OpenSSL, Qt …) gehören "
         "nicht zur eigentlichen Programmlogik – beschreibe sie nur als verwendete Technik. Ist eine "
-        "Laufzeitumgebung genannt, erkläre, wo die eigentliche Programmlogik liegt."
+        "Laufzeitumgebung genannt, erkläre, wo die eigentliche Programmlogik liegt.\n"
+        "10. Gibt es eine „Bundle-Auswertung (Funktionslandkarte)“, nutze IPC-Kanäle, Aktions-/Ereignisnamen, "
+        "Endpunkte und Oberflächentexte, um konkrete Funktionen der Anwendung zu benennen (z. B. „Titel herunterladen“ "
+        "statt „Netzwerkoperationen“). Minifizierter Code hat verkürzte Variablennamen – stütze dich auf diese "
+        "Zeichenketten statt auf die Namen."
     )
 
 

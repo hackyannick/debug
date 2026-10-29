@@ -62,7 +62,11 @@ Die Antworten stehen oben im Bericht unter *Deine Fragen an die KI* (neueste zue
 **Tipp für Electron-Programme** (Discord, Slack, Qobuz, VS Code …): nicht die `.exe` hochladen, sondern
 `resources\app.asar` – oder, wenn es stattdessen einen Ordner `resources\app` gibt, diesen als ZIP
 (`Compress-Archive resources\app app.zip`) – bzw. den Installer; sonst dokumentiert die KI nur Electron.
-`node_modules` werden dabei nur mit Name und Version aufgelistet, der eigene Code wird zuerst gelesen.
+`node_modules` werden dabei nur mit Name und Version aufgelistet, der eigene Code wird zuerst gelesen – dazu zählen
+auch eigene Pakete des Herstellers (z. B. `@qobuz/…` bei Qobuz). Minifizierte Bundles bekommen eine
+**Funktionslandkarte** (IPC-Kanäle, Aktionsnamen, Endpunkte/Hosts, URL-Protokolle, Einstellungen, Oberflächentexte,
+genutzte Electron-Funktionen); die KI liest davon gezielt die aufschlussreichsten Code-Teile (`max_code_chunks`).
+Viele kleine gleichartige Dateien (z. B. SQL-Migrationen) werden gemeinsam zusammengefasst.
 
 **Gegenprüfung:** Nennt die KI DLLs, die in den Analysedaten nicht vorkommen, hängt die Magic Box einen
 sichtbaren Hinweis an den Text an.
