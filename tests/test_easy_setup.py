@@ -94,19 +94,33 @@ def env(tmp_path):
     ory = FakeOryAdmin()
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
-    for cmd in ("nginx", "certbot", "systemctl"):
+    for cmd in ("nginx", "systemctl", "apt-get"):
         stub = bin_dir / cmd
         stub.write_text(f'#!/bin/sh\necho "{cmd} $*" >> {tmp_path}/stubs.log\nexit 0\n')
         stub.chmod(0o755)
-    for d in ("avail", "enabled", "le/magicbox.hackdv.com"):
+    # certbot-Attrappe: "plugins" listet $CERTBOT_PLUGINS, "certonly -d X" legt ein Zertifikat an
+    certbot = bin_dir / "certbot"
+    certbot.write_text(f"""#!/bin/sh
+echo "certbot $*" >> {tmp_path}/stubs.log
+if [ "$1" = plugins ]; then echo "$CERTBOT_PLUGINS"; exit 0; fi
+prev=""
+for a in "$@"; do
+  if [ "$prev" = "-d" ]; then mkdir -p "$LE_LIVE/$a"; touch "$LE_LIVE/$a/fullchain.pem"; fi
+  prev="$a"
+done
+exit 0
+""")
+    certbot.chmod(0o755)
+    for d in ("avail", "enabled", "le/live/magicbox.hackdv.com", "le/renewal"):
         (tmp_path / d).mkdir(parents=True)
-    (tmp_path / "le/magicbox.hackdv.com/fullchain.pem").write_text("x")
+    (tmp_path / "le/live/magicbox.hackdv.com/fullchain.pem").write_text("x")
     (tmp_path / "setup.env").write_text(
         f'R640_IP="10.0.201.50"\nGATEWAY_IP="10.0.201.10"\nHYDRA_ADMIN="{ory.url}"\n'
         f'HYDRA_PUBLIC="{ory.url}"\nKRATOS_ADMIN="{ory.url}"\n')
     environ = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}", "SKIP_ROOT_CHECK": "1",
                "NGINX_AVAILABLE": str(tmp_path / "avail"), "NGINX_ENABLED": str(tmp_path / "enabled"),
-               "LE_LIVE": str(tmp_path / "le"), "NO_PROXY": "127.0.0.1"}
+               "LE_DIR": str(tmp_path / "le"), "LE_LIVE": str(tmp_path / "le/live"), "NO_PROXY": "127.0.0.1",
+               "CERTBOT_PLUGINS": "* nginx\n* webroot"}
     environ.pop("SSH_CLIENT", None)
     yield ory, tmp_path, environ
     ory.server.shutdown()
@@ -158,3 +172,40 @@ def test_gateway_dry_run_changes_nothing(env):
     assert res.returncode == 0, res.stdout + res.stderr
     assert not ory.clients and not (tmp / "avail" / "magicbox.conf").exists()
     assert "[dry-run]" in res.stdout
+
+
+def test_gateway_webroot_certificate_like_id_host(env):
+    """Kein Zertifikat, certbot ohne nginx-Plugin, id.hackdv.com per Webroot → gleiches Verfahren nutzen."""
+    ory, tmp, environ = env
+    (tmp / "le/live/magicbox.hackdv.com/fullchain.pem").unlink()
+    (tmp / "le/renewal/id.hackdv.com.conf").write_text(
+        "[renewalparams]\nauthenticator = webroot\nwebroot_path = /var/www/acme,\n")
+    environ["CERTBOT_PLUGINS"] = "* standalone\n* webroot"
+    res = run_gateway(tmp, environ, "", "--yes")
+    assert res.returncode == 0, res.stdout + res.stderr
+    stubs = (tmp / "stubs.log").read_text()
+    assert "certbot certonly --webroot -w /var/www/acme -d magicbox.hackdv.com" in stubs
+    assert stubs.count("systemctl reload nginx") == 2  # erst Port 80 für Let's Encrypt, dann komplett
+    site = (tmp / "avail/magicbox.conf").read_text()
+    assert "location ^~ /.well-known/acme-challenge/ { root /var/www/acme; }" in site
+    assert "listen 443 ssl;" in site and "return 301 https://$host$request_uri;" in site
+    assert "Gateway fertig." in res.stdout
+
+
+def test_gateway_without_certificate_keeps_secret_and_kratos_fallback(env):
+    """Wie im echten Lauf: Kratos-URL falsch, kein nginx-Plugin, Installation abgelehnt."""
+    ory, tmp, environ = env
+    (tmp / "le/live/magicbox.hackdv.com/fullchain.pem").unlink()
+    environ["CERTBOT_PLUGINS"] = "* standalone"
+    env_file = (tmp / "setup.env")
+    env_file.write_text(env_file.read_text().replace(f'KRATOS_ADMIN="{ory.url}"', 'KRATOS_ADMIN="http://127.0.0.1:9"'))
+    # 8× Vorschläge, dann Ausweich-URL für Kratos, post_logout ja, nginx-Plugin NEIN, eine E-Mail
+    answers = "\n" * 8 + f"{ory.url}\n" + "j\n" + "n\n" + "yannick@hackdv.com\n"
+    res = run_gateway(tmp, environ, answers)
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert "keine Verbindung" in res.stdout and f"Kratos Admin API erreichbar ({ory.url})" in res.stdout
+    assert ory.identities["i1"]["traits"]["groups"] == ["magicbox"]  # Gruppe trotz fehlendem Zertifikat gesetzt
+    assert not (tmp / "avail/magicbox.conf").exists()
+    assert "fehlt noch das Zertifikat" in res.stdout
+    saved = env_file.read_text()
+    assert "CLIENT_SECRET=" in saved and f'KRATOS_ADMIN="{ory.url}"' in saved

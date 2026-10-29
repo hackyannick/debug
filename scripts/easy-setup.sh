@@ -36,7 +36,11 @@ ROLE=""
 # Pfade (für Tests überschreibbar)
 NGINX_AVAILABLE="${NGINX_AVAILABLE:-/etc/nginx/sites-available}"
 NGINX_ENABLED="${NGINX_ENABLED:-/etc/nginx/sites-enabled}"
-LE_LIVE="${LE_LIVE:-/etc/letsencrypt/live}"
+LE_DIR="${LE_DIR:-/etc/letsencrypt}"
+LE_LIVE="${LE_LIVE:-$LE_DIR/live}"
+LE_RENEWAL="${LE_RENEWAL:-$LE_DIR/renewal}"
+ACME_WEBROOT=""
+CERT_PENDING=0
 HOSTS_FILE="${HOSTS_FILE:-/etc/hosts}"
 MB_CONF="${MB_CONF:-/etc/magicbox/settings.json}"
 MB_VENV="${MB_VENV:-/opt/magicbox/.venv}"
@@ -178,8 +182,18 @@ role_gateway() {
     ok "Hydra antwortet, Aussteller: $ISSUER"
     [ "$(http_code "$HYDRA_ADMIN/admin/clients?page_size=1")" = 200 ] || die "Hydra Admin API unter $HYDRA_ADMIN nicht erreichbar."
     ok "Hydra Admin API erreichbar"
-    if [ "$(http_code "$KRATOS_ADMIN/admin/identities?page_size=1")" = 200 ]; then ok "Kratos Admin API erreichbar"
-    else warn "Kratos Admin API unter $KRATOS_ADMIN nicht erreichbar – Gruppen-Schritt wird übersprungen"; KRATOS_ADMIN=""; fi
+    if ! kratos_check "$KRATOS_ADMIN"; then
+        local alt=""
+        if [ "$YES" = 0 ]; then
+            read -r -p "  Andere Adresse für die Kratos Admin API (leer = Gruppen-Schritt überspringen): " alt < "$TTY" || true
+        fi
+        if [ -n "$alt" ] && kratos_check "$alt"; then
+            KRATOS_ADMIN="$alt"
+        else
+            warn "Gruppen-Schritt wird übersprungen (Gruppe später von Hand setzen, siehe docs/Ory-Anmeldung.md)"
+            KRATOS_ADMIN=""
+        fi
+    fi
 
     title "3/6  Hydra-Client '$CLIENT_ID'"
     local code
@@ -207,11 +221,19 @@ role_gateway() {
     if confirm "Nach dem Abmelden zurück zur Magic Box leiten (post_logout_redirect_uri registrieren)?" j; then
         if client_add_post_logout "https://$MB_DOMAIN/"; then POST_LOGOUT="https://$MB_DOMAIN/"; fi
     fi
+    AUTH_MODE="oidc"
+    save_env  # sofort sichern: das Client-Geheimnis ist ab jetzt in Hydra gültig
 
     title "4/6  nginx + Zertifikat für $MB_DOMAIN"
     need_cmd nginx
-    setup_certificate
-    write_nginx_site
+    detect_acme_webroot
+    if setup_certificate; then
+        write_nginx_site full
+    else
+        CERT_PENDING=1
+        warn "nginx-Site für $MB_DOMAIN übersprungen, solange das Zertifikat fehlt."
+        info "Nach dem Beheben einfach erneut starten – alle Antworten werden übernommen."
+    fi
 
     title "5/6  Zugriff (Gruppe '$GROUP')"
     if [ -n "$GROUP" ] && [ -n "$KRATOS_ADMIN" ]; then
@@ -240,7 +262,7 @@ role_gateway() {
 
     cat <<EOF
 
-  ${G}${B}Gateway fertig.${N}
+  $(if [ "$CERT_PENDING" = 1 ]; then echo "${Y}${B}Gateway fast fertig – es fehlt noch das Zertifikat für $MB_DOMAIN (Hinweise oben).${N}"; else echo "${G}${B}Gateway fertig.${N}"; fi)
 
   Nächste Schritte:
    1. ${B}DNS:${N} $MB_DOMAIN → gleiche öffentliche Adresse wie $ID_HOST
@@ -248,6 +270,21 @@ role_gateway() {
    2. Datei auf den R640 kopieren:   scp $ENV_FILE <benutzer>@$R640_IP:
    3. Auf dem R640 im Magic-Box-Ordner: sudo ./scripts/easy-setup.sh server --env ~/$(basename "$ENV_FILE")
 EOF
+}
+
+kratos_check() {  # kratos_check URL – mit Diagnose, wenn es nicht klappt
+    local code ports
+    code="$(http_code --max-time 5 "$1/admin/identities")"
+    case "$code" in
+        200) ok "Kratos Admin API erreichbar ($1)"; return 0 ;;
+        000) warn "Kratos Admin API unter $1: keine Verbindung" ;;
+        *)   warn "Kratos Admin API unter $1 antwortet mit HTTP $code (erwartet 200)" ;;
+    esac
+    if command -v ss >/dev/null; then
+        ports="$(ss -ltnpH 2>/dev/null | awk '/kratos/{print $4}' | sort -u | tr '\n' ' ' || true)"
+        if [ -n "$ports" ]; then info "Kratos lauscht hier auf: $ports"; fi
+    fi
+    return 1
 }
 
 client_json() {  # Basis-JSON für einen neuen Client
@@ -335,28 +372,111 @@ client_read_settings() {
     [[ "$SCOPES" == *groups* ]] || warn "Scope 'groups' ist für den Client nicht erlaubt – falls der groups-Claim fehlt, im Client ergänzen."
 }
 
-setup_certificate() {
-    if [ -f "$LE_LIVE/$MB_DOMAIN/fullchain.pem" ]; then ok "Zertifikat vorhanden"; return; fi
-    local want have
-    want="$(getent ahostsv4 "$ID_HOST" | awk 'NR==1{print $1}' || true)"
-    have="$(getent ahostsv4 "$MB_DOMAIN" | awk 'NR==1{print $1}' || true)"
-    if [ -z "$have" ]; then
-        warn "$MB_DOMAIN löst noch nicht auf. Bitte DNS-Eintrag anlegen (gleiche Adresse wie $ID_HOST: ${want:-?})."
-        confirm "DNS ist jetzt gesetzt – weiter mit dem Zertifikat?" j || die "Ohne Zertifikat keine nginx-Site. Später erneut ausführen."
-    elif [ -n "$want" ] && [ "$have" != "$want" ]; then
-        warn "$MB_DOMAIN → $have, $ID_HOST → $want (unterschiedlich – gewollt?)"
+resolve_public() {  # A-Record über einen öffentlichen Resolver – vorbei an LAN-DNS/hosts
+    if command -v dig >/dev/null; then
+        dig +short +time=3 +tries=1 A "$1" @1.1.1.1 2>/dev/null | grep -E '^[0-9.]+$' | tail -1 || true
+    elif command -v host >/dev/null; then
+        host -t A -W 3 "$1" 1.1.1.1 2>/dev/null | awk '/has address/{print $4}' | tail -1 || true
     fi
+}
+
+dns_report() {
+    local pub_id pub_mb loc_mb
+    loc_mb="$(getent ahostsv4 "$MB_DOMAIN" | awk 'NR==1{print $1}' || true)"
+    pub_id="$(resolve_public "$ID_HOST")"
+    pub_mb="$(resolve_public "$MB_DOMAIN")"
+    if [ -z "$pub_id$pub_mb" ]; then
+        info "Öffentliches DNS nicht prüfbar (dig/host fehlt oder 1.1.1.1 nicht erreichbar)."
+    elif [ -z "$pub_mb" ]; then
+        warn "Öffentlich löst $MB_DOMAIN nicht auf – A-Eintrag auf ${pub_id:-die öffentliche IP} anlegen (wie $ID_HOST)."
+    elif [ -n "$pub_id" ] && [ "$pub_mb" != "$pub_id" ]; then
+        warn "Öffentlich: $MB_DOMAIN → $pub_mb, aber $ID_HOST → $pub_id. Für das Zertifikat muss $MB_DOMAIN auf $pub_id zeigen."
+    else
+        ok "Öffentliches DNS: $MB_DOMAIN → $pub_mb (wie $ID_HOST)"
+    fi
+    if [ -n "$loc_mb" ] && [ "$loc_mb" = "$GATEWAY_IP" ]; then
+        ok "LAN-DNS: $MB_DOMAIN → $GATEWAY_IP (dieses Gateway)"
+    elif [ -n "$loc_mb" ] && [ "$loc_mb" != "$pub_mb" ]; then
+        warn "Im LAN zeigt $MB_DOMAIN auf $loc_mb – dieses Gateway ist aber $GATEWAY_IP."
+        info "LAN-DNS bzw. hosts-Eintrag auf $GATEWAY_IP ändern, sonst landen Browser und Desktop-App im LAN woanders."
+        info "(Für das Zertifikat zählt nur der öffentliche Eintrag.)"
+    fi
+}
+
+renewal_value() {  # renewal_value DATEI SCHLÜSSEL – Wert aus einer certbot-renewal-Datei
+    awk -F' *= *' -v k="$2" '$1==k{gsub(/,/, "", $2); print $2; exit}' "$1" 2>/dev/null | xargs || true
+}
+
+# Webroot, über den Let's Encrypt prüft – aus der certbot-Konfiguration der Magic Box bzw. des Identitätsanbieters
+detect_acme_webroot() {
+    local conf
+    for conf in "$LE_RENEWAL/$MB_DOMAIN.conf" "$LE_RENEWAL/$ID_HOST.conf"; do
+        if [ ! -f "$conf" ] || [ "$(renewal_value "$conf" authenticator)" != webroot ]; then continue; fi
+        ACME_WEBROOT="$(renewal_value "$conf" webroot_path)"
+        if [ -z "$ACME_WEBROOT" ]; then ACME_WEBROOT="$(renewal_value "$conf" "$ID_HOST")"; fi
+        if [ -n "$ACME_WEBROOT" ]; then return 0; fi
+    done
+    return 0
+}
+
+certbot_has_nginx() {
+    certbot plugins --prepare 2>/dev/null | grep -qE '^\* nginx'
+}
+
+setup_certificate() {
+    if [ -f "$LE_LIVE/$MB_DOMAIN/fullchain.pem" ]; then ok "Zertifikat vorhanden"; return 0; fi
     need_cmd certbot
-    run certbot certonly --nginx -d "$MB_DOMAIN" --non-interactive --keep-until-expiring \
-        || die "certbot fehlgeschlagen. DNS prüfen und erneut ausführen."
+    dns_report
+    local id_auth=""
+    if [ -f "$LE_RENEWAL/$ID_HOST.conf" ]; then id_auth="$(renewal_value "$LE_RENEWAL/$ID_HOST.conf" authenticator)"; fi
+
+    if [ -n "$ACME_WEBROOT" ]; then
+        info "Zertifikat per Webroot ($ACME_WEBROOT) – wie bei $ID_HOST"
+        # Erst nur Port 80 (für die Prüfung durch Let's Encrypt), HTTPS folgt nach dem Zertifikat
+        write_nginx_site http
+        if ! run certbot certonly --webroot -w "$ACME_WEBROOT" -d "$MB_DOMAIN" --non-interactive --keep-until-expiring; then
+            warn "certbot (Webroot) fehlgeschlagen – meist zeigt das öffentliche DNS noch nicht auf das Gateway."
+            return 1
+        fi
+    else
+        if ! certbot_has_nginx; then
+            if [ -n "$id_auth" ]; then
+                info "$ID_HOST nutzt bei certbot das Verfahren '$id_auth' – das übernimmt das Skript nicht automatisch."
+            fi
+            if confirm "certbot-Plugin für nginx installieren (apt install python3-certbot-nginx)?" j; then
+                if ! run apt-get install -y python3-certbot-nginx; then warn "Installation fehlgeschlagen"; return 1; fi
+            else
+                warn "Bitte das Zertifikat selbst ausstellen: certbot certonly --${id_auth:-webroot} -d $MB_DOMAIN"
+                return 1
+            fi
+        fi
+        info "Zertifikat über das nginx-Plugin von certbot"
+        if ! run certbot certonly --nginx -d "$MB_DOMAIN" --non-interactive --keep-until-expiring; then
+            warn "certbot fehlgeschlagen – meist zeigt das öffentliche DNS noch nicht auf das Gateway."
+            return 1
+        fi
+    fi
     ok "Zertifikat ausgestellt"
 }
 
-write_nginx_site() {
-    local site="$NGINX_AVAILABLE/magicbox.conf" tmp backup=""
+write_nginx_site() {  # write_nginx_site http|full
+    local mode="${1:-full}" site="$NGINX_AVAILABLE/magicbox.conf" tmp backup="" acme=""
     tmp="$(mktemp)"
+    if [ -n "$ACME_WEBROOT" ]; then
+        acme="    location ^~ /.well-known/acme-challenge/ { root $ACME_WEBROOT; }"
+    fi
     cat > "$tmp" <<EOF
 # Magic Box – erzeugt von easy-setup.sh (bei Änderungen wird eine Sicherung angelegt)
+server {
+    listen 80;
+    listen [::]:80;
+    server_name $MB_DOMAIN;
+$acme
+    location / { return 301 https://\$host\$request_uri; }
+}
+EOF
+    if [ "$mode" = full ]; then cat >> "$tmp" <<EOF
+
 server {
     listen 443 ssl;
     listen [::]:443 ssl;
@@ -389,6 +509,7 @@ server {
     }
 }
 EOF
+    fi
     if [ -f "$site" ] && cmp -s "$tmp" "$site"; then ok "nginx-Site unverändert"; rm -f "$tmp"; return; fi
     if [ -f "$site" ]; then
         backup="$site.bak-$(date +%Y%m%d%H%M%S)"
@@ -400,7 +521,8 @@ EOF
     [ -e "$NGINX_ENABLED/magicbox.conf" ] || run ln -s "$site" "$NGINX_ENABLED/magicbox.conf"
     if [ "$DRY" = 1 ] || nginx -t 2>/dev/null; then
         run systemctl reload nginx
-        ok "nginx-Site aktiv: https://$MB_DOMAIN → $R640_IP:8765"
+        if [ "$mode" = full ]; then ok "nginx-Site aktiv: https://$MB_DOMAIN → $R640_IP:8765"
+        else ok "Vorläufige nginx-Site (nur Port 80 für Let's Encrypt) aktiv"; fi
     else
         nginx -t || true
         warn "nginx -t schlägt fehl – Änderung wird zurückgenommen"
