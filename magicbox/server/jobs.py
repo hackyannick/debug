@@ -18,12 +18,15 @@ from typing import BinaryIO
 
 from magicbox.config import Settings
 from magicbox.engine import Cancelled
-from magicbox.pipeline import Callbacks, run
+from magicbox.llm.client import LLMError
+from magicbox.model import AnalysisResult
+from magicbox.pipeline import Callbacks, ask, run
 from magicbox.report.builder import safe_name
 
 JOB_ID_RE = re.compile(r"^[0-9a-f]{12}$")
 SEV_RANK = {"info": 0, "low": 1, "medium": 2, "high": 3}
 VERDICT_RE = re.compile(r"Einstufung:\s*\**\s*([A-Za-zäöüÄÖÜ]+)", re.I)
+MAX_QUESTION = 2000
 
 
 @dataclass
@@ -52,6 +55,10 @@ class Job:
     ioc_count: int = 0
     rev: int = 0  # steigt bei jeder Änderung – die Oberfläche verwirft damit veraltete Stände
     created_by: str = ""
+    question: str = ""  # Frage, die schon beim Hochladen gestellt wurde
+    ask: str = ""  # Nachfrage, die gerade wartet bzw. beantwortet wird
+    qa_count: int = 0
+    notice: str = ""  # Hinweis zur letzten Nachfrage (z. B. KI nicht erreichbar)
 
     def public(self) -> dict:
         d = asdict(self)
@@ -125,7 +132,11 @@ class JobManager:
                 job = Job(**json.loads((d / "job.json").read_text(encoding="utf-8")))
             except (OSError, ValueError, TypeError):
                 continue
-            if job.status == "running":
+            if job.status == "running" and job.ask:
+                job.status, job.stage, job.ask = "done", "fertig", ""
+                job.notice = "Server wurde während der Nachfrage neu gestartet – bitte erneut fragen."
+                self._save_quiet(job)
+            elif job.status == "running":
                 job.status, job.error, job.stage = "error", "Server wurde während der Analyse neu gestartet.", "abgebrochen"
                 self._save_quiet(job)
             self.jobs[job.id] = job
@@ -148,7 +159,7 @@ class JobManager:
             return self.jobs[job_id]
 
     def create(self, name: str, stream: BinaryIO, size: int, password: str = "", profile: str = "",
-               user: str = "") -> Job:
+               user: str = "", question: str = "") -> Job:
         job_id = uuid.uuid4().hex[:12]
         d = self.job_dir(job_id)
         (d / "sample").mkdir(parents=True)
@@ -170,7 +181,7 @@ class JobManager:
         os.chmod(target, 0o400)  # nie ausführbar
         job = Job(id=job_id, name=os.path.basename(name.replace("\\", "/")) or fname, sample=fname, size=size,
                   sha256=h.hexdigest(), created=time.time(), profile=profile or self.settings.profile,
-                  password=password, created_by=user)
+                  password=password, created_by=user, question=question.strip()[:MAX_QUESTION])
         with self._lock:
             self.jobs[job_id] = job
             self._save(job)
@@ -185,7 +196,10 @@ class JobManager:
     def cancel(self, job_id: str) -> None:
         with self._lock:
             job = self.jobs[job_id]
-            if job.status == "queued":
+            if job.status == "queued" and job.ask:
+                job.ask = ""
+                self._finish(job, "done", "")
+            elif job.status == "queued":
                 self._finish(job, "cancelled", "Abgebrochen")
             elif job.status == "running" and job_id in self._cancel:
                 self._cancel[job_id].set()
@@ -199,8 +213,26 @@ class JobManager:
             for f in ("log.txt", "ki.txt"):
                 (self.job_dir(job_id) / f).unlink(missing_ok=True)
             job = replace(job, status="queued", stage="wartet", progress=0, error="", llm_error="", started=None,
-                          finished=None, risk="", counts={}, detections=[], llm_verdict="", ioc_count=0)
+                          finished=None, risk="", counts={}, detections=[], llm_verdict="", ioc_count=0,
+                          ask="", qa_count=0, notice="")
             self.jobs[job_id] = job
+            self._save(job)
+        self.hub.publish({"type": "job", "job": job.public()})
+        self._queue.put(job_id)
+        return job
+
+    def ask(self, job_id: str, question: str) -> Job:
+        """Nachfrage zu einer fertigen Analyse (läuft über dieselbe Warteschlange, nur die KI arbeitet)."""
+        question = question.strip()[:MAX_QUESTION]
+        if not question:
+            raise ValueError("Bitte eine Frage eingeben.")
+        if not self.settings.use_llm:
+            raise RuntimeError("Die KI ist in den Einstellungen deaktiviert.")
+        with self._lock:
+            job = self.jobs[job_id]
+            if job.status != "done" or not (self.job_dir(job_id) / "report" / "analysis.json").is_file():
+                raise RuntimeError("Fragen gehen erst, wenn die Analyse fertig ist.")
+            job.status, job.stage, job.progress, job.ask, job.notice = "queued", "Frage wartet", 0, question, ""
             self._save(job)
         self.hub.publish({"type": "job", "job": job.public()})
         self._queue.put(job_id)
@@ -259,18 +291,13 @@ class JobManager:
                 self.live.pop(job_id, None)
                 self.log_count.pop(job_id, None)
 
-    def _run(self, job: Job) -> None:
-        d = self.job_dir(job.id)
-        settings = replace(self.settings, profile=job.profile or self.settings.profile)
-        if job.password:
-            settings.archive_passwords = [job.password] + [p for p in settings.archive_passwords if p != job.password]
-        cancel = self._cancel[job.id]
-        log_file = open(d / "log.txt", "a", encoding="utf-8")
-        self.live[job.id] = []
-        self.log_count[job.id] = 0
+    def _callbacks(self, job: Job, log_file, previous_ai: str = ""):
+        """Callbacks für einen Lauf: Protokoll, KI-Text (live) und Fortschritt an alle Browser verteilen."""
+        self.live[job.id] = [previous_ai] if previous_ai else []
+        self.log_count[job.id] = len(self.log_lines(job.id, limit=10 ** 9))
         pending: list[str] = []
         last_flush = [time.monotonic()]
-        total = [0]  # Zeichen KI-Text bisher; "pos" in Ereignissen = Startposition des Stücks
+        total = [len(previous_ai)]  # Zeichen KI-Text bisher; "pos" in Ereignissen = Startposition des Stücks
         pending_start = [0]
 
         def flush_tokens():
@@ -304,9 +331,20 @@ class JobManager:
                 self._save(job)
             self.hub.publish({"type": "job", "job": job.public()})
 
-        cb = Callbacks(log=on_log, progress=on_progress, token=on_token, is_cancelled=cancel.is_set)
+        cancel = self._cancel[job.id]
+        return Callbacks(log=on_log, progress=on_progress, token=on_token, is_cancelled=cancel.is_set), flush_tokens
+
+    def _run(self, job: Job) -> None:
+        if job.ask:
+            return self._run_ask(job)
+        d = self.job_dir(job.id)
+        settings = replace(self.settings, profile=job.profile or self.settings.profile)
+        if job.password:
+            settings.archive_passwords = [job.password] + [p for p in settings.archive_passwords if p != job.password]
+        log_file = open(d / "log.txt", "a", encoding="utf-8")
+        cb, flush_tokens = self._callbacks(job, log_file)
         try:
-            outcome = run(d / "sample" / job.sample, settings, cb, report_folder=d / "report")
+            outcome = run(d / "sample" / job.sample, settings, cb, report_folder=d / "report", question=job.question)
         except Cancelled:
             flush_tokens()
             self._finish(job, "cancelled", "Abgebrochen")
@@ -328,8 +366,36 @@ class JobManager:
             job.risk = "hoch" if counts["high"] or job.detections else "mittel" if counts["medium"] else "gering"
             job.llm_error = outcome.llm_error
             job.model = r.llm_model
+            job.qa_count = len(r.qa)
             m = VERDICT_RE.search(r.llm_doc or "")
             job.llm_verdict = m.group(1).lower() if m else ""
+        self._finish(job, "done", "")
+
+    def _run_ask(self, job: Job) -> None:
+        d = self.job_dir(job.id)
+        settings = replace(self.settings, profile=job.profile or self.settings.profile)
+        try:
+            result = AnalysisResult.from_dict(json.loads((d / "report" / "analysis.json").read_text(encoding="utf-8")))
+        except (OSError, ValueError, TypeError) as exc:
+            with self._lock:
+                job.ask, job.notice = "", f"Analysedaten nicht lesbar – bitte neu analysieren ({exc})."
+            return self._finish(job, "done", "")
+        log_file = open(d / "log.txt", "a", encoding="utf-8")
+        cb, flush_tokens = self._callbacks(job, log_file, previous_ai=self.ai_text(job.id))
+        notice = ""
+        try:
+            ask(result, job.ask, settings, cb, report_folder=d / "report", llm_error=job.llm_error)
+        except Cancelled:
+            notice = "Nachfrage abgebrochen."
+        except (LLMError, ValueError) as exc:
+            notice = f"Frage konnte nicht beantwortet werden: {exc}"
+            cb.log(f"⚠ {notice}")
+        finally:
+            flush_tokens()
+            log_file.close()
+            (d / "ki.txt").write_text("".join(self.live.get(job.id, [])), encoding="utf-8")
+        with self._lock:
+            job.ask, job.notice, job.qa_count = "", notice, len(result.qa)
         self._finish(job, "done", "")
 
     def _finish(self, job: Job, status: str, error: str) -> None:

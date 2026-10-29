@@ -1,20 +1,16 @@
 :root {
-  --bg: #f7f7fb; --paper: #ffffff; --ink: #1f2330; --muted: #5d6475; --accent: #6d28d9;
-  --accent-soft: #ede9fe; --line: #e3e3ee; --code-bg: #f3f2fa; --shadow: 0 1px 3px rgba(20, 20, 50, .08);
-}
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #12131a; --paper: #1b1d27; --ink: #e6e7ee; --muted: #a0a6b8; --accent: #b79cff;
-    --accent-soft: #2b2545; --line: #2e3142; --code-bg: #161822; --shadow: none;
-  }
+  /* dunkel wie die Oberfläche (OWA-Gate-Stil); gedruckt wird hell, siehe @media print */
+  --bg: #07090d; --paper: #11141a; --ink: #e5e8ee; --muted: #8b94a5; --accent: #5aa2ff; --head: #0b5ed7;
+  --accent-soft: #0d1f3b; --line: #252b36; --code-bg: #0b0e13; --shadow: 0 10px 30px rgba(0, 0, 0, .55);
+  color-scheme: dark;
 }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--ink);
   font: 16px/1.6 "Inter", "Segoe UI", "Noto Sans", system-ui, sans-serif; }
-.doc { max-width: 980px; margin: 32px auto; padding: 40px 48px; background: var(--paper);
-  border-radius: 14px; box-shadow: var(--shadow); }
-h1 { font-size: 2rem; margin: 0 0 .25rem; color: var(--accent); }
-h2 { font-size: 1.45rem; margin-top: 2.4rem; padding-bottom: .3rem; border-bottom: 2px solid var(--accent-soft); }
+.doc { max-width: 980px; margin: 24px auto; padding: 36px 44px; background: var(--paper);
+  border: 1px solid var(--line); border-top: 6px solid var(--head); border-radius: 6px; box-shadow: var(--shadow); }
+h1 { font-size: 2rem; margin: 0 0 .25rem; color: var(--ink); }
+h2 { font-size: 1.45rem; margin-top: 2.4rem; padding-bottom: .3rem; border-bottom: 2px solid var(--line); color: var(--accent); }
 h3 { font-size: 1.15rem; margin-top: 1.8rem; }
 h4, h5, h6 { font-size: 1rem; margin-top: 1.4rem; color: var(--muted); }
 p, li { max-width: 75ch; }
@@ -34,4 +30,8 @@ pre { background: var(--code-bg); border: 1px solid var(--line); border-radius: 
 pre code { background: none; padding: 0; font-size: .82rem; }
 em { color: var(--muted); }
 @media (max-width: 700px) { .doc { margin: 0; padding: 20px 16px; border-radius: 0; } }
-@media print { body { background: #fff; } .doc { box-shadow: none; margin: 0; max-width: none; } pre { max-height: none; } }
+@media print {
+  :root { --bg: #fff; --paper: #fff; --ink: #1f2330; --muted: #5d6475; --accent: #0b5ed7; --accent-soft: #e7f0fd;
+    --line: #dde2ea; --code-bg: #f4f6fa; color-scheme: light; }
+  .doc { box-shadow: none; margin: 0; max-width: none; border: 0; } pre { max-height: none; }
+}

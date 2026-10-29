@@ -85,3 +85,34 @@ def document_prompt(name: str, facts: str, notes: str, s: Settings) -> str:
         "(Überschriften ggf. in die Zielsprache übersetzen, Hinweise in Klammern nicht übernehmen):\n\n"
         f"{outline}"
     )
+
+
+def search_terms_prompt(question: str) -> str:
+    return (
+        f"Frage zu einer analysierten Datei: „{question}“\n\n"
+        "Welche Begriffe würden im Programmcode (Pseudocode, dekompilierter Code, Skript) an der gesuchten Stelle "
+        "vorkommen? Denke an englische API- und Funktionsnamen, Bibliotheken und typische Teilwörter "
+        "(z. B. für Netzwerk: socket, connect, send, http, InternetOpen; für Verschlüsselung: crypt, aes, xor, key). "
+        "Antworte nur mit 5 bis 20 Begriffen in einer Zeile, durch Kommas getrennt, ohne Erklärung."
+    )
+
+
+def question_prompt(name: str, facts: str, code: str, partial: bool, question: str, s: Settings) -> str:
+    code_block = ""
+    if code:
+        hint = ("(Auszug: die zur Frage passendsten Stellen laut Stichwortsuche – nicht der vollständige Code.)\n\n"
+                if partial else "")
+        code_block = f"\n\n# Code-Stellen\n{hint}{code}"
+    return (
+        f"# Analyse-Fakten zu „{name}“\n{facts}{code_block}\n\n"
+        f"# Frage\n{question}\n\n"
+        "# Auftrag\n"
+        f"Beantworte die Frage auf {s.language}, ausschließlich anhand der Fakten und Code-Stellen oben.\n"
+        "- Geht es um eine Funktion oder Stelle im Code: Nenne sie genau (Name bzw. Adresse, Klasse/Methode) und "
+        "erkläre verständlich, was sie tut – Schritt für Schritt, mit Ein- und Ausgaben, aufgerufenen APIs und ihrer "
+        "Rolle im Gesamtprogramm. Zitiere kurze, aussagekräftige Code-Zeilen.\n"
+        "- Kommen mehrere Stellen in Frage, nenne die wahrscheinlichste zuerst und die übrigen kurz.\n"
+        "- Lässt sich die Frage mit diesen Daten nicht sicher beantworten, sag das ehrlich, nenne, was am nächsten "
+        "dran ist, und wie man weiterkommt.\n"
+        "Beginne direkt mit der Antwort, ohne die Frage zu wiederholen."
+    )

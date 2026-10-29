@@ -369,6 +369,12 @@ class MagicBoxServer:
                         return self._json(m.get(job_id).public())
                     if action == "rerun" and method == "POST":
                         return self._json(m.rerun(job_id).public())
+                    if action == "ask" and method == "POST":
+                        try:
+                            job = m.ask(job_id, str(self._body_json().get("question", "")))
+                        except RuntimeError as exc:
+                            return self._error(409, str(exc))
+                        return self._json(job.public())
                     if action in REPORT_FILES and method == "GET":
                         m.get(job_id)
                         rel, ctype, download = REPORT_FILES[action]
@@ -393,7 +399,7 @@ class MagicBoxServer:
                 name = q.get("name") or "probe"
                 profile = q.get("profile", "") if q.get("profile") in ("malware", "allgemein") else ""
                 job = server.manager.create(name, self.rfile, size, password=q.get("password", ""), profile=profile,
-                                            user=self.identity.name)
+                                            user=self.identity.name, question=q.get("question", ""))
                 return self._json(job.public(), 201)
 
             def _events(self) -> None:
@@ -424,9 +430,16 @@ class MagicBoxServer:
 
 
 def _page(title: str, body: str) -> bytes:
-    return (f"<!doctype html><meta charset='utf-8'><title>{html.escape(title)}</title>"
-            f"<body style='font-family:system-ui;max-width:640px;margin:15vh auto;padding:0 16px'>"
-            f"<h1>🪄 {html.escape(title)}</h1><p>{body}</p></body>").encode()
+    """Einfache Hinweisseite (z. B. Anmeldefehler) im selben dunklen Kartenstil wie die Oberfläche."""
+    return (f"<!doctype html><meta charset='utf-8'><meta name='color-scheme' content='dark'>"
+            f"<meta name='viewport' content='width=device-width, initial-scale=1'><title>{html.escape(title)}</title>"
+            "<body style=\"margin:0;min-height:100vh;background:#07090d;color:#e5e8ee;"
+            "font:15px/1.5 'Segoe UI',system-ui,sans-serif;display:flex;flex-direction:column;align-items:center\">"
+            "<div style='color:#5aa2ff;font-weight:650;margin:28px 0 22px'>🪄 Magic Box</div>"
+            "<div style='width:min(520px,calc(100vw - 32px));background:#11141a;border:1px solid #252b36;"
+            "border-radius:6px;overflow:hidden;box-shadow:0 10px 30px rgba(0,0,0,.55)'>"
+            f"<div style='background:#0b5ed7;color:#fff;padding:11px 16px'>{html.escape(title)}</div>"
+            f"<div style='padding:18px 16px'>{body}</div></div></body>").encode()
 
 
 def serve(settings: Settings, host: str | None = None, port: int | None = None, watch: list[Path] | None = None,

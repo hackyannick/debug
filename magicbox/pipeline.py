@@ -31,7 +31,16 @@ class Callbacks:
     is_cancelled: Callable[[], bool] = lambda: False
 
 
-def run(path: Path, settings: Settings, cb: Callbacks | None = None, report_folder: Path | None = None) -> JobOutcome:
+def _llm_progress(cb: Callbacks, start: int, span: int):
+    def step(done: int, total: int, label: str) -> None:
+        stage = f"KI · Schritt {done + 1} von {total}: {label}" if total > 1 else f"KI · {label}"
+        cb.progress(start + int(span * done / total), stage)
+    return step
+
+
+def run(path: Path, settings: Settings, cb: Callbacks | None = None, report_folder: Path | None = None,
+        question: str = "") -> JobOutcome:
+    """Datei analysieren und dokumentieren; ``question`` wird vorab gezielt beantwortet."""
     cb = cb or Callbacks()
     start = time.monotonic()
     path = Path(path)
@@ -45,12 +54,11 @@ def run(path: Path, settings: Settings, cb: Callbacks | None = None, report_fold
         cb.progress(45, "KI schreibt Dokumentation")
         cb.log(f"▶ Sende Fakten an {settings.provider} @ {settings.base_url} (Modell {settings.model})")
         try:
-            def llm_step(done: int, total: int, label: str) -> None:
-                stage = f"KI · Schritt {done + 1} von {total}: {label}" if total > 1 else f"KI · {label}"
-                cb.progress(45 + int(50 * done / total), stage)
-
             doc = Documenter(settings, log=cb.log, on_token=cb.token, is_cancelled=cb.is_cancelled,
-                             on_progress=llm_step)
+                             on_progress=_llm_progress(cb, 45, 50))
+            if question.strip():
+                cb.log(f"▶ Deine Frage: {question.strip()}")
+                doc.answer(result, question, reserve=1)
             doc.document(result)
             cb.log(f"✔ KI-Dokumentation fertig ({doc.calls} Anfrage(n))")
         except LLMCancelled as exc:
@@ -67,3 +75,24 @@ def run(path: Path, settings: Settings, cb: Callbacks | None = None, report_fold
     cb.log(f"✔ Bericht gespeichert: {files.html} ({seconds:.0f} s)")
     cb.progress(100, "Fertig")
     return JobOutcome(result, files, llm_error, seconds)
+
+
+def ask(result: AnalysisResult, question: str, settings: Settings, cb: Callbacks | None = None,
+        report_folder: Path | None = None, llm_error: str = "") -> JobOutcome:
+    """Nachfrage zu einer fertigen Analyse: nur die KI arbeitet, der Bericht wird um die Antwort ergänzt."""
+    cb = cb or Callbacks()
+    start = time.monotonic()
+    cb.progress(5, "KI · Frage beantworten")
+    cb.log(f"▶ Frage an {settings.model}: {question.strip()}")
+    try:
+        doc = Documenter(settings, log=cb.log, on_token=cb.token, is_cancelled=cb.is_cancelled,
+                         on_progress=_llm_progress(cb, 5, 90))
+        doc.answer(result, question)
+    except LLMCancelled as exc:
+        raise Cancelled() from exc
+    cb.progress(95, "Bericht ergänzen")
+    files = write_report(result, Path(settings.output_dir), llm_error, folder=report_folder)
+    seconds = time.monotonic() - start
+    cb.log(f"✔ Antwort im Bericht ergänzt ({seconds:.0f} s)")
+    cb.progress(100, "Fertig")
+    return JobOutcome(result, files, "", seconds)

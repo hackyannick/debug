@@ -6,7 +6,7 @@ sowohl der technische Bericht als auch der Kontext für das LLM erzeugt.
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from typing import Any
 
 SEVERITIES = ("info", "low", "medium", "high")
@@ -67,6 +67,8 @@ class AnalysisResult:
     detections: list[str] = field(default_factory=list)
     llm_doc: str = ""
     llm_model: str = ""
+    # Eigene Fragen an die KI: {"question", "answer", "model", "time"}
+    qa: list[dict] = field(default_factory=list)
 
     def add(self, section: Section) -> Section:
         self.sections.append(section)
@@ -87,3 +89,21 @@ class AnalysisResult:
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "AnalysisResult":
+        """Gegenstück zu ``to_dict`` (z. B. analysis.json) – unbekannte Felder werden ignoriert."""
+        known = {f.name for f in fields(cls)}
+        d = {k: v for k, v in data.items() if k in known}
+        d["sections"] = [_section(s) for s in d.get("sections", [])]
+        d["findings"] = [Finding(**f) for f in d.get("findings", [])]
+        d["children"] = [cls.from_dict(c) for c in d.get("children", [])]
+        return cls(**d)
+
+
+def _section(data: dict[str, Any]) -> Section:
+    known = {f.name for f in fields(Section)}
+    d = {k: v for k, v in data.items() if k in known}
+    if d.get("table"):
+        d["table"] = Table(**d["table"])
+    return Section(**d)

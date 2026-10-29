@@ -14,7 +14,7 @@ from dataclasses import replace
 from pathlib import Path
 
 ICON_SVG = (b"<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' rx='14' "
-            b"fill='#6d28d9'/><text x='32' y='45' font-size='38' text-anchor='middle'>\xf0\x9f\xaa\x84</text></svg>")
+            b"fill='#0b5ed7'/><text x='32' y='45' font-size='38' text-anchor='middle'>\xf0\x9f\xaa\x84</text></svg>")
 
 
 def main(argv: list[str] | None = None, server_url: str | None = None) -> int:
@@ -22,8 +22,8 @@ def main(argv: list[str] | None = None, server_url: str | None = None) -> int:
     if hasattr(os, "geteuid") and os.geteuid() == 0:
         os.environ.setdefault("QTWEBENGINE_CHROMIUM_FLAGS", "--no-sandbox")
     try:
-        from PySide6.QtCore import QUrl
-        from PySide6.QtGui import QAction, QDesktopServices, QIcon, QPixmap
+        from PySide6.QtCore import Qt, QUrl
+        from PySide6.QtGui import QAction, QColor, QDesktopServices, QIcon, QPixmap
         from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineProfile
         from PySide6.QtWebEngineWidgets import QWebEngineView
         from PySide6.QtWidgets import QApplication, QFileDialog, QInputDialog, QMainWindow, QMessageBox
@@ -53,6 +53,10 @@ def main(argv: list[str] | None = None, server_url: str | None = None) -> int:
 
     app = QApplication(sys.argv[:1] + (argv or []))
     app.setApplicationName("Magic Box")
+    try:  # dunkle Fensterrahmen/Menüs passend zur Oberfläche (Qt ≥ 6.8)
+        app.styleHints().setColorScheme(Qt.ColorScheme.Dark)
+    except AttributeError:
+        pass
     icon_file = Path(__file__).resolve().parent.parent / "assets" / "magicbox.png"
     if icon_file.exists():
         app.setWindowIcon(QIcon(str(icon_file)))
@@ -68,6 +72,7 @@ def main(argv: list[str] | None = None, server_url: str | None = None) -> int:
     class Page(QWebEnginePage):
         def __init__(self, prof, parent=None):
             super().__init__(prof, parent)
+            self.setBackgroundColor(QColor("#07090d"))  # kein weißes Aufblitzen vor dem Laden
             self.popups: list = []
 
         def createWindow(self, _type):  # „Bericht öffnen ↗“ in eigenem Fenster mit gleichem Login

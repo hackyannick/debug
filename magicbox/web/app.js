@@ -59,7 +59,6 @@ function fmtTime(ts) {
 async function loadStatus() {
   const s = await api("/api/status");
   state.status = s;
-  $("#version").textContent = "v" + s.version;
   $("#opt-profile").value = s.profile;
   const llm = $("#pill-llm");
   llm.querySelector(".label").textContent = s.llm.enabled ? `${s.llm.model} @ ${s.llm.url}` : "KI aus";
@@ -71,8 +70,18 @@ async function loadStatus() {
   $("#user-name").textContent = s.user.method === "token" ? "🔑 Zugangsschlüssel" : `👤 ${s.user.name}`;
   $("#user-name").title = s.auth_mode === "token" ? "" : `Angemeldet über Ory (${s.auth_mode})`;
   renderTools(s.tools);
+  renderFoot();
   if (s.llm.enabled) checkLLM(true);
 }
+
+// Fußzeile wie beim OWA-Gate: Version · Modell · Uhrzeit (UTC)
+function renderFoot() {
+  const s = state.status;
+  if (!s) return;
+  const now = new Date().toISOString().slice(0, 16).replace("T", " ");
+  $("#foot").textContent = `Magic Box v${s.version} · ${s.llm.enabled ? s.llm.model : "KI aus"} · ${now} UTC`;
+}
+setInterval(renderFoot, 30000);
 
 async function checkLLM(silent) {
   const dot = $("#pill-llm .dot");
@@ -164,6 +173,7 @@ function renderJob(fresh = false, switchTabs = fresh) {
   $("#empty").classList.toggle("hidden", !!j);
   $("#job").classList.toggle("hidden", !j);
   if (!j) return;
+  const followUp = !!j.ask && ["queued", "running"].includes(j.status);  // Nachfrage zu fertigem Bericht
 
   $("#job-name").textContent = j.name;
   const meta = $("#job-meta");
@@ -189,19 +199,28 @@ function renderJob(fresh = false, switchTabs = fresh) {
     if (c.high || c.medium) chip("neutral", `${c.high || 0} hoch · ${c.medium || 0} mittel · ${c.low || 0} niedrig`);
     if (j.ioc_count) chip("info", `${j.ioc_count} IOCs`);
     if (j.llm_error) chip("warn", "ohne KI-Text");
+    if (j.qa_count) chip("info", `❓ ${j.qa_count} ${j.qa_count === 1 ? "Frage" : "Fragen"} beantwortet`);
+    if (j.notice) chip("warn", `⚠ ${j.notice}`);
+  } else if (followUp) {
+    chip("info", j.status === "queued" ? "❓ Frage wartet" : "❓ KI beantwortet deine Frage");
   } else {
     chip("neutral", `${STATUS[j.status]?.[0] || ""} ${STATUS[j.status]?.[1] || j.status}`);
+    if (j.question) chip("info", "❓ mit Frage an die KI");
   }
+  renderSteps(j);
+  renderAsk(j);
 
   const done = j.status === "done";
+  const hasReport = done || (followUp && !!j.finished);
   const base = `/api/jobs/${j.id}`;
   $("#act-open").href = `${base}/report`;
-  $("#act-open").classList.toggle("disabled", !done);
-  $("#act-download").disabled = !done;
+  $("#act-open").classList.toggle("disabled", !hasReport);
+  $("#act-download").disabled = !hasReport;
   $("#dl-md").href = `${base}/report.md`;
   $("#dl-json").href = `${base}/analysis.json`;
   $("#dl-iocs").href = `${base}/iocs.csv`;
   $("#act-cancel").classList.toggle("hidden", !["queued", "running"].includes(j.status));
+  $("#act-cancel").textContent = followUp ? "⛔ Frage abbrechen" : "⛔ Abbrechen";
   $("#act-rerun").classList.toggle("hidden", ["queued", "running"].includes(j.status));
   $("#act-delete").disabled = j.status === "running";
 
@@ -215,7 +234,7 @@ function renderJob(fresh = false, switchTabs = fresh) {
 
   const frame = $("#report-frame");
   const ph = $("#report-placeholder");
-  if (done) {
+  if (hasReport) {
     const src = `${base}/report?t=${j.finished}`;
     if (frame.dataset.src !== src) {
       frame.src = src;
@@ -232,10 +251,59 @@ function renderJob(fresh = false, switchTabs = fresh) {
   }
   if (fresh) {
     $("#ai-text").textContent = state.ai || (running ? "" : "(keine KI-Ausgabe)");
+    if (followUp) $("#ai-text").scrollTop = $("#ai-text").scrollHeight;  // neue Antwort folgt unten
     $("#log-text").textContent = state.log.join("\n");
     if (switchTabs && running && j.status === "running") switchTab("ai");
     else if (switchTabs && done) switchTab("report");
   }
+}
+
+// Schritt-Anzeige (wie Captcha → Login → 2FA beim OWA-Gate): Analyse → KI → Bericht
+const STEP_LABELS = ["Analyse", "KI", "Bericht"];
+function renderSteps(j) {
+  const p = j.progress || 0;
+  const ki = /^KI/.test(j.stage || "");
+  let current;
+  if (j.status === "done") current = 3;
+  else if (j.ask) current = p >= 95 ? 2 : 1;
+  else if (j.status === "queued") current = 0;
+  else if (["error", "cancelled"].includes(j.status)) current = p >= 95 ? 2 : p >= 45 ? 1 : 0;
+  else current = ki ? 1 : p >= 95 ? 2 : 0;
+  const failed = ["error", "cancelled"].includes(j.status);
+  const noKi = j.status === "done" && !j.model;
+  document.querySelectorAll("#job-steps li").forEach((li, i) => {
+    li.className = i < current ? "done" : i === current ? (failed ? "failed" : "active") : "";
+    if (i === current && j.status === "running") li.classList.add("busy");
+    if (i === 1 && noKi) li.className = "skipped";
+    li.querySelector(".lbl").textContent = i === 1 && j.ask ? "KI · Frage" : STEP_LABELS[i];
+  });
+  $("#job-level").textContent = j.status === "done" ? "abgeschlossen"
+    : failed ? (j.status === "error" ? "Fehler" : "abgebrochen")
+    : `${j.ask ? "Nachfrage · " : ""}Schritt ${Math.min(current + 1, 3)} von 3`;
+}
+
+function renderAsk(j) {
+  const input = $("#ask-input");
+  const btn = $("#ask-btn");
+  const llm = state.status?.llm.enabled;
+  const ready = j.status === "done" && llm;
+  input.disabled = btn.disabled = !ready;
+  btn.textContent = j.ask && ["queued", "running"].includes(j.status) ? "⏳ …" : "Fragen";
+  input.placeholder = !llm ? "Die KI ist in den Einstellungen deaktiviert."
+    : ready ? "Frage zur Datei, z. B. „Suche die Funktion, die die Daten verschlüsselt, und erkläre sie verständlich.“ (Strg+Enter)"
+    : j.status === "done" || j.ask ? "Die KI beantwortet gerade eine Frage …"
+    : ["queued", "running"].includes(j.status) ? "Fragen kannst du stellen, sobald die Analyse fertig ist."
+    : "Fragen gehen nur zu fertigen Analysen – ggf. „↻ Neu“ starten.";
+}
+
+async function askQuestion() {
+  const question = $("#ask-input").value.trim();
+  if (!question || !state.current) return;
+  try {
+    upsertJob(await api(`/api/jobs/${state.current}/ask`, { method: "POST", json: { question } }));
+    $("#ask-input").value = "";
+    switchTab("ai");
+  } catch (e) { toast(e.message, true); }
 }
 
 function switchTab(name) {
@@ -267,10 +335,19 @@ function appendTo(pre, text) {
 }
 
 // ------------------------------------------------------------------ Upload
-function upload(file) {
+function uploadAll(files) {
+  files = [...files];
+  if (!files.length) return;
+  const question = $("#opt-question").value.trim();
+  files.forEach((f) => upload(f, question));
+  $("#opt-question").value = "";  // die Frage gilt für genau diese Datei(en)
+}
+
+function upload(file, question = "") {
   const params = new URLSearchParams({ name: file.name, profile: $("#opt-profile").value });
   const pw = $("#opt-password").value.trim();
   if (pw) params.set("password", pw);
+  if (question) params.set("question", question);
   const row = el("div", "upload", `⬆ ${file.name} (${fmtSize(file.size)})`);
   const wrap = el("div", "bar-wrap");
   const bar = el("div");
@@ -303,7 +380,7 @@ function upload(file) {
 function setupDrop() {
   const drop = $("#drop");
   const input = $("#file-input");
-  input.addEventListener("change", () => { [...input.files].forEach(upload); input.value = ""; });
+  input.addEventListener("change", () => { uploadAll(input.files); input.value = ""; });
   drop.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); input.click(); } });
   // Dateien dürfen überall ins Fenster fallen
   window.addEventListener("dragover", (e) => { e.preventDefault(); drop.classList.add("over"); });
@@ -315,7 +392,7 @@ function setupDrop() {
     if (items.some((i) => i.webkitGetAsEntry?.()?.isDirectory)) {
       toast("Ordner bitte als ZIP hochladen (oder auf dem Server den Drop-Ordner nutzen).", true);
     }
-    [...(e.dataTransfer?.files || [])].filter((f) => f.size > 0 || f.type).forEach(upload);
+    uploadAll([...(e.dataTransfer?.files || [])].filter((f) => f.size > 0 || f.type));
   });
 }
 
@@ -332,12 +409,14 @@ function connectEvents() {
       upsertJob(ev.job);
       if (before && before.status !== ev.job.status && ev.job.id === state.current) {
         if (ev.job.status === "running") {
-          state.ai = ""; state.aiLen = 0; state.log = []; state.logTotal = 0;
-          $("#ai-text").textContent = ""; $("#log-text").textContent = ""; switchTab("ai");
+          selectJob(ev.job.id, false);  // Stand neu laden – eine Nachfrage setzt KI-Text und Protokoll fort
+          switchTab("ai");
         }
         if (ev.job.status === "done") switchTab("report");
       }
-      if (before?.status === "running" && ev.job.status === "done") toast(`✅ ${ev.job.name} ist fertig`);
+      if (before?.status === "running" && ev.job.status === "done") {
+        toast(before.ask ? `✅ Antwort zu ${ev.job.name} steht im Bericht` : `✅ ${ev.job.name} ist fertig`);
+      }
     } else if (ev.type === "token" && ev.id === state.current && !state.loading) {
       const chars = [...ev.text];
       const pos = ev.pos ?? state.aiLen;
@@ -382,6 +461,10 @@ function setupActions() {
     const j = state.jobs.get(state.current);
     if (!j || !confirm(`„${j.name}“ inkl. Probe und Bericht löschen?`)) return;
     try { await api(`/api/jobs/${j.id}`, { method: "DELETE" }); } catch (e) { toast(e.message, true); }
+  });
+  $("#ask-form").addEventListener("submit", (e) => { e.preventDefault(); askQuestion(); });
+  $("#ask-input").addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); askQuestion(); }
   });
   $("#pill-llm").addEventListener("click", () => checkLLM(false));
   $("#pill-tools").addEventListener("click", () => $("#dlg-tools").showModal());

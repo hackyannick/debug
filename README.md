@@ -49,6 +49,17 @@ die dein Netzwerk verlassen.
 4. **IOCs** – entschärft (`hxxp://evil[.]com`) plus `iocs.csv` zum Import in Firewall/SIEM
 5. **Technischer Anhang** – alle Rohdaten
 
+### Fragen an die KI
+
+Beim Hochladen (Feld *Frage an die KI*) oder später zu jedem fertigen Auftrag kannst du frei fragen, z. B.
+„Suche die Funktion, die die Verbindung zum Server aufbaut, und erkläre sie verständlich.“
+Die Antworten stehen oben im Bericht unter *Deine Fragen an die KI* (neueste zuerst).
+
+Passt der extrahierte Code nicht komplett in den Kontext des Modells, leitet die KI zuerst Suchbegriffe aus der
+Frage ab (z. B. `socket, connect, InternetOpen`); per Stichwortsuche werden dann die passendsten Funktionen,
+Methoden bzw. Makros ausgewählt und mit den Analyse-Fakten an das Modell gegeben. Nachfragen analysieren die
+Datei nicht neu – nur die KI arbeitet.
+
 ## Schnellstart
 
 ### Easy Setup (empfohlen)

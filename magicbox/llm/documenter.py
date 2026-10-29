@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import math
+import re
+import time
 from typing import Callable
 
 from magicbox.config import Settings
@@ -13,6 +16,21 @@ from .client import LLMClient
 Log = Callable[[str], None]
 SEV_LABEL = {"high": "HOCH", "medium": "MITTEL", "low": "NIEDRIG", "info": "INFO"}
 BORING_KINDS = {"image", "text"}
+# Abschnittsmarken im extrahierten Code (radare2: "// ===== name =====", VBA: "' ===== modul =====")
+UNIT_MARK = re.compile(r"^(?://|')\s*={3,}\s*(.+?)\s*={3,}\s*$")
+# Beginn einer Funktion/Methode in Quelltext bzw. dekompiliertem Code
+FUNC_START = re.compile(
+    r"^[ \t]*(?:(?:public|private|protected|internal|static|async|override|virtual|sealed|final|export|unsafe)\s+)+"
+    r"[\w<>\[\],.?]+(?:\s+[\w<>\[\],.?]+)?\s*\(|"
+    r"^[ \t]*(?:async\s+)?(?:def|function|func|fn|sub|private\s+sub|public\s+sub|private\s+function|"
+    r"public\s+function)\s+[\w$.]+", re.I | re.M)
+STOPWORDS = set("""
+aber alle allem allen aller alles also auch bitte dann dass dem den denen der des die dies diese diesem diesen dieser
+dieses doch dort durch eine einem einen einer eines erkläre erklaere erklären etwas für funktion funktionen gibt habe
+hier ihre ihren ist kann kannst mache macht mich mir mit nach nicht noch oder sich sie sind such suche suchen über und
+uns unter verständlich verstaendlich vom von was welche welcher welches werden wie wird wo zum zur
+code datei stelle stellen programm the and that this with what which does find function explain please
+""".split())
 
 
 def render_section(sec: Section, limit: int) -> str:
@@ -133,6 +151,7 @@ class Documenter:
 
     def document(self, result: AnalysisResult) -> str:
         budget = self.s.context_chars
+        self.planned = max(self.planned, self.calls + 1)
         notes = self._notes(result, budget)
         facts_budget = budget - min(len(notes), budget // 2)
         include_code = not notes  # Code wurde bereits in Notizen verdichtet
@@ -150,7 +169,7 @@ class Documenter:
             interesting = [c for c in result.children if c.kind not in BORING_KINDS or c.findings]
             interesting.sort(key=lambda c: (-len([f for f in c.findings if f.severity in ("high", "medium")]),
                                             c.kind in ("source",), -c.size))
-            self.planned = len(interesting[: self.s.max_llm_children]) + 1
+            self.planned = self.calls + len(interesting[: self.s.max_llm_children]) + 1
             for child in interesting[: self.s.max_llm_children]:
                 facts = facts_text(child, int(budget * 0.8))
                 summary = self._ask(prompts.child_notes_prompt(child.name, facts), f"Teil-Analyse: {child.name}")
@@ -167,9 +186,113 @@ class Documenter:
         if len(chunks) > self.s.max_code_chunks:
             self.log(f"Code hat {len(chunks)} Teile – nur die ersten {self.s.max_code_chunks} werden einzeln gelesen.")
             chunks = chunks[: self.s.max_code_chunks]
-        self.planned = len(chunks) + 1
+        self.planned = self.calls + len(chunks) + 1
         for i, chunk in enumerate(chunks, 1):
             summary = self._ask(prompts.code_notes_prompt(result.name, i, len(chunks), chunk, context),
                                 f"Code-Teil {i}/{len(chunks)} zusammenfassen")
             notes.append(f"### Code-Teil {i}\n{summary}")
         return "\n\n".join(notes)
+
+    # ------------------------------------------------------------------ Eigene Fragen
+    def answer(self, result: AnalysisResult, question: str, reserve: int = 0) -> str:
+        """Beantwortet eine Frage zur Datei, z. B. „Suche die Funktion, die … macht, und erkläre sie“.
+
+        Passt der Code nicht komplett in den Kontext, leitet das Modell zuerst Suchbegriffe ab; die passendsten
+        Code-Stellen (Funktionen, Methoden, Makros) werden per Stichwortsuche ausgewählt.
+        ``reserve``: Anzahl danach noch geplanter Anfragen (nur für die Fortschrittsanzeige).
+        """
+        question = question.strip()
+        budget = self.s.context_chars
+        facts = facts_text(result, int(budget * 0.3), include_code=False)
+        units = code_units(result)
+        code_budget = max(1500, budget - len(facts) - len(question) - 1500)
+        partial = sum(len(u[2]) + 40 for u in units) > code_budget
+        self.planned = self.calls + (2 if partial else 1) + reserve
+        terms = question_terms(question)
+        if partial:
+            reply = self._ask(prompts.search_terms_prompt(question), "Suchbegriffe ableiten")
+            terms += [t for t in parse_terms(reply) if t not in terms]
+            self.log(f"Suchbegriffe: {', '.join(terms) or '–'}")
+            units = select_units(units, terms, code_budget)
+            self.log("Ausgewählte Code-Stellen: " + (", ".join(u[0] for u in units) or "keine"))
+        code = "\n\n".join(f"### {label}\n```{lang}\n{text.strip()}\n```" for label, lang, text in units)
+        reply = self._ask(prompts.question_prompt(result.name, facts, code, partial, question, self.s),
+                          "Frage beantworten")
+        result.qa.append({"question": question, "answer": reply, "model": self.s.model, "time": time.time()})
+        return reply
+
+
+def code_units(result: AnalysisResult, size: int = 2400) -> list[tuple[str, str, str]]:
+    """Zerlegt allen extrahierten Code in Einheiten (Bezeichnung, Sprache, Text) – möglichst je Funktion."""
+    units: list[tuple[str, str, str]] = []
+    for node in result.walk():
+        prefix = "" if node is result else f"{node.name} › "
+        for sec in node.sections:
+            if not sec.code or sec.code_lang in ("text", ""):
+                continue
+            lines = sec.code.splitlines(keepends=True)
+            has_marks = any(UNIT_MARK.match(l) for l in lines)
+            parts: list[list[str]] = [[]]
+            for line in lines:
+                starts = UNIT_MARK.match(line) if has_marks else FUNC_START.match(line)
+                if starts and any(x.strip() for x in parts[-1]):
+                    parts.append([])
+                parts[-1].append(line)
+            for part in parts:
+                text = "".join(part)
+                if not text.strip():
+                    continue
+                first = next(l for l in part if l.strip()).strip()
+                mark = UNIT_MARK.match(first)
+                label = mark.group(1) if mark else (first[:90] if FUNC_START.match(first) else sec.title)
+                for i, chunk in enumerate(split_chunks(text, size)):
+                    units.append((prefix + label + (f" (Forts. {i})" if i else ""), sec.code_lang, chunk))
+    return units
+
+
+def question_terms(question: str) -> list[str]:
+    words = re.findall(r"[\w.$:]{3,}", question.lower())
+    out: list[str] = []
+    for w in words:
+        w = w.strip(".:")
+        if len(w) >= 3 and w not in STOPWORDS and w not in out:
+            out.append(w)
+    return out
+
+
+def parse_terms(reply: str) -> list[str]:
+    out: list[str] = []
+    for raw in re.split(r"[,;\n]", reply):
+        t = raw.strip().strip("-*•`'\"„“”()[]").strip().lower()
+        if 3 <= len(t) <= 40 and t not in STOPWORDS and t not in out and len(t.split()) <= 2:
+            out.append(t)
+    return out[:25]
+
+
+def select_units(units: list[tuple[str, str, str]], terms: list[str], budget: int) -> list[tuple[str, str, str]]:
+    """Die zur Frage passendsten Code-Einheiten (Stichwort-Treffer, gewichtet) innerhalb des Budgets."""
+    def score(unit: tuple[str, str, str]) -> float:
+        label, text = unit[0].lower(), unit[2].lower()
+        total = 0.0
+        for t in terms:
+            n = text.count(t)
+            weight = min(len(t), 12) / 4
+            if n:
+                total += (1 + math.log(n)) * weight
+            if t in label:
+                total += 3 * weight
+        return total
+
+    ranked = sorted(((score(u), i) for i, u in enumerate(units)), key=lambda x: (-x[0], x[1]))
+    if not ranked or ranked[0][0] == 0:
+        ranked = [(0, i) for i in range(len(units))]  # nichts gefunden: Einstiegspunkte (Anfang) zeigen
+    picked, used = [], 0
+    for sc, i in ranked:
+        if ranked[0][0] and sc == 0:
+            break
+        size = len(units[i][2]) + 40
+        if used + size > budget:
+            continue
+        picked.append(units[i])
+        used += size
+    return picked

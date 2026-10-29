@@ -155,6 +155,7 @@ def build_markdown(result: AnalysisResult, llm_error: str = "") -> str:
     if result.hashes:
         out.append(f"`SHA-256: {result.hashes.get('sha256', '')}`\n")
 
+    out += _qa_md(result)
     out += ["## Auf einen Blick", "", rule_based_summary(result), ""]
 
     if result.llm_doc:
@@ -179,6 +180,25 @@ def build_markdown(result: AnalysisResult, llm_error: str = "") -> str:
     out += ["---", "", "## Technischer Anhang", ""]
     out += _result_md(result, 3)
     return "\n".join(out)
+
+
+def _qa_md(result: AnalysisResult) -> list[str]:
+    """Eigene Fragen an die KI – neueste zuerst, ganz oben, weil gezielt gefragt."""
+    if not result.qa:
+        return []
+    out = ["## ❓ Deine Fragen an die KI", ""]
+    for item in reversed(result.qa):
+        question = str(item.get("question", "")).strip().replace("\n", "\n> ")
+        when = dt.datetime.fromtimestamp(item["time"]).strftime("%d.%m.%Y %H:%M") if item.get("time") else ""
+        answer = str(item.get("answer", "")).strip()
+        # Überschriften der Antwort unter die Frage hängen (mindestens Ebene 4)
+        answer = re.sub(r"^(#{1,3}) ", lambda m: "#" * min(len(m.group(1)) + 3, 6) + " ", answer, flags=re.M)
+        meta = " · ".join(x for x in (when, item.get("model", "")) if x)
+        out += [f"> **Frage:** {question}", "", answer or "*(keine Antwort)*", ""]
+        if meta:
+            out += [f"*{meta}*", ""]
+        out += ["---", ""]
+    return out
 
 
 def _result_md(result: AnalysisResult, level: int) -> list[str]:

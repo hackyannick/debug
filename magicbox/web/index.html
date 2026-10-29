@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
 <title>Magic Box</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%AA%84%3C/text%3E%3C/svg%3E">
 <link rel="stylesheet" href="/static/app.css">
@@ -10,7 +11,7 @@
 </head>
 <body>
 <header class="topbar">
-  <div class="brand"><span class="logo">🪄</span><span>Magic Box</span><span class="version" id="version"></span></div>
+  <div class="brand"><span class="logo">🪄</span><span>Magic Box</span></div>
   <div class="pills">
     <button class="pill" id="pill-llm" title="KI-Server"><span class="dot"></span><span class="label">KI …</span></button>
     <button class="pill" id="pill-tools" title="Analyse-Werkzeuge"><span class="label">Werkzeuge …</span></button>
@@ -21,42 +22,63 @@
 
 <div class="layout">
   <aside class="sidebar">
-    <label class="drop" id="drop" tabindex="0">
-      <input type="file" id="file-input" multiple hidden>
-      <span class="drop-icon">📦</span>
-      <span class="drop-title">Datei hier reinwerfen</span>
-      <span class="drop-hint">oder klicken · EXE, DLL, ELF, APK, JAR, ZIP/7z (auch mit Passwort), Office, PDF, Skripte</span>
-    </label>
-    <div class="upload-opts">
-      <label>Profil
-        <select id="opt-profile">
-          <option value="malware">🛡️ Malware</option>
-          <option value="allgemein">📘 Software</option>
-        </select>
-      </label>
-      <label>Archiv-Passwort
-        <input id="opt-password" type="text" placeholder="z. B. infected" autocomplete="off" spellcheck="false">
-      </label>
-    </div>
-    <div id="uploads"></div>
-    <div class="jobs-head"><span>Aufträge</span><span class="count" id="job-count"></span></div>
-    <ul class="jobs" id="jobs"></ul>
+    <section class="card">
+      <div class="card-head"><span>Neue Analyse</span><span class="head-note">statisch · offline</span></div>
+      <div class="card-body stack">
+        <label class="drop" id="drop" tabindex="0">
+          <input type="file" id="file-input" multiple hidden>
+          <span class="drop-icon">📦</span>
+          <span class="drop-title">Datei hier reinwerfen</span>
+          <span class="drop-hint">oder klicken · EXE, DLL, ELF, APK, JAR, ZIP/7z (auch mit Passwort), Office, PDF, Skripte</span>
+        </label>
+        <div class="upload-opts">
+          <label>Profil
+            <select id="opt-profile">
+              <option value="malware">🛡️ Malware</option>
+              <option value="allgemein">📘 Software</option>
+            </select>
+          </label>
+          <label>Archiv-Passwort
+            <input id="opt-password" type="text" placeholder="z. B. infected" autocomplete="off" spellcheck="false">
+          </label>
+        </div>
+        <label class="field"><span>Frage an die KI <span class="opt">· optional</span></span>
+          <textarea id="opt-question" rows="3" maxlength="2000"
+            placeholder="z. B. Suche die Funktion, die die Verbindung zum Server aufbaut, und erkläre sie verständlich."></textarea>
+        </label>
+        <div id="uploads"></div>
+      </div>
+    </section>
+    <section class="card grow">
+      <div class="card-head"><span>Aufträge</span><span class="head-note" id="job-count"></span></div>
+      <ul class="jobs" id="jobs"></ul>
+    </section>
   </aside>
 
   <main class="main" id="main">
-    <section class="empty" id="empty">
-      <h1>Datei rein – Doku raus.</h1>
-      <p>Die Magic Box nimmt Dateien <strong>statisch</strong> auseinander – sie werden nie ausgeführt – und lässt
-        dein lokales Sprachmodell daraus eine verständliche Dokumentation schreiben. Nichts verlässt dein Netzwerk.</p>
-      <ol class="steps">
-        <li><b>Erkennen &amp; entpacken</b><span>Dateityp, Passwort-Archive, UPX, kodierte Skript-Stufen</span></li>
-        <li><b>Zerlegen</b><span>Header, Imports, Strings, Disassembly/Pseudocode, .NET-Dekompilierung, Makros</span></li>
-        <li><b>Bewerten</b><span>YARA, capa/MITRE ATT&amp;CK, Fähigkeiten, IOCs</span></li>
-        <li><b>Dokumentieren</b><span>Lokales LLM schreibt Bericht, Rohdaten im Anhang</span></li>
-      </ol>
+    <section class="card empty" id="empty">
+      <div class="card-head"><span>Magic Box</span><span class="head-note">Datei rein – Doku raus</span></div>
+      <div class="card-body">
+        <h1>Datei rein – Doku raus.</h1>
+        <p>Die Magic Box nimmt Dateien <strong>statisch</strong> auseinander – sie werden nie ausgeführt – und lässt
+          dein lokales Sprachmodell daraus eine verständliche Dokumentation schreiben. Nichts verlässt dein Netzwerk.</p>
+        <ol class="steps">
+          <li><b>Erkennen &amp; entpacken</b><span>Dateityp, Passwort-Archive, UPX, kodierte Skript-Stufen</span></li>
+          <li><b>Zerlegen</b><span>Header, Imports, Strings, Disassembly/Pseudocode, .NET-Dekompilierung, Makros</span></li>
+          <li><b>Bewerten</b><span>YARA, capa/MITRE ATT&amp;CK, Fähigkeiten, IOCs</span></li>
+          <li><b>Dokumentieren</b><span>Lokales LLM schreibt Bericht und beantwortet deine Fragen zur Datei</span></li>
+        </ol>
+      </div>
     </section>
 
-    <section class="job hidden" id="job">
+    <section class="card job hidden" id="job">
+      <div class="card-head"><span>Analyse-Auftrag</span><span class="head-note" id="job-level"></span></div>
+      <div class="card-body job-body">
+      <ol class="stepper" id="job-steps">
+        <li data-step="analyse"><span class="circle"></span><span class="lbl">Analyse</span></li>
+        <li data-step="ki"><span class="circle"></span><span class="lbl">KI</span></li>
+        <li data-step="bericht"><span class="circle"></span><span class="lbl">Bericht</span></li>
+      </ol>
       <div class="job-head">
         <div class="job-title">
           <h1 id="job-name"></h1>
@@ -82,6 +104,11 @@
         <div class="track" id="job-track"><div class="bar" id="job-bar"></div></div>
         <span class="pct" id="job-pct"></span><span class="stage" id="job-stage"></span>
       </div>
+      <form class="ask" id="ask-form">
+        <textarea id="ask-input" rows="2" maxlength="2000"
+          placeholder="Frage zur Datei, z. B. „Suche die Funktion, die die Daten verschlüsselt, und erkläre sie verständlich.“ (Strg+Enter)"></textarea>
+        <button class="btn primary" id="ask-btn" type="submit">Fragen</button>
+      </form>
       <nav class="tabs" role="tablist">
         <button class="tab active" data-tab="report">📖 Bericht</button>
         <button class="tab" data-tab="ai">🤖 KI live</button>
@@ -98,13 +125,16 @@
         </div>
         <div class="panel" data-panel="log"><pre id="log-text" class="mono"></pre></div>
       </div>
+      </div>
     </section>
   </main>
 </div>
+<footer class="foot" id="foot"></footer>
 
 <dialog id="dlg-settings" class="dialog">
   <form method="dialog" id="settings-form">
-    <h2>Einstellungen</h2>
+    <div class="dialog-head"><span>Einstellungen</span><span class="head-note">gelten ab dem nächsten Auftrag</span></div>
+    <div class="dialog-body">
     <fieldset>
       <legend>KI-Server</legend>
       <label class="check"><input type="checkbox" name="use_llm"> KI-Dokumentation erzeugen</label>
@@ -161,6 +191,7 @@
         </div>
       </details>
     </fieldset>
+    </div>
     <div class="dialog-actions">
       <button type="button" class="btn ghost" value="cancel" id="settings-cancel">Abbrechen</button>
       <button type="submit" class="btn primary" value="save">Speichern</button>
@@ -169,17 +200,21 @@
 </dialog>
 
 <dialog id="dlg-tools" class="dialog">
-  <h2>Analyse-Werkzeuge</h2>
+  <div class="dialog-head"><span>Analyse-Werkzeuge</span></div>
+  <div class="dialog-body">
   <p class="muted">Fehlende Werkzeuge werden übersprungen – die Analyse läuft trotzdem. Installation siehe Hinweis.</p>
   <table class="tools-table"><thead><tr><th></th><th>Werkzeug</th><th>Wofür</th><th>Status / Installation</th></tr></thead><tbody id="tools-body"></tbody></table>
+  </div>
   <div class="dialog-actions"><button class="btn primary" id="tools-close">Schließen</button></div>
 </dialog>
 
 <dialog id="dlg-login" class="dialog small">
   <form id="login-form">
-    <h2>🔒 Zugang</h2>
+    <div class="dialog-head"><span>🔒 Zugang</span></div>
+    <div class="dialog-body">
     <p class="muted">Dieser Magic-Box-Server ist mit einem Zugangsschlüssel geschützt.</p>
     <label>Zugangsschlüssel<input name="token" type="password" autocomplete="current-password" required></label>
+    </div>
     <div class="dialog-actions"><button class="btn primary" type="submit">Anmelden</button></div>
   </form>
 </dialog>
