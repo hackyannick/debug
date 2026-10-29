@@ -40,6 +40,8 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex: none; }
 .dot.ok { background: var(--good); } .dot.bad { background: var(--bad); } .dot.off { background: var(--line); }
 
+.user { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; color: var(--muted); white-space: nowrap; }
+
 /* ---------- Buttons */
 .btn { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line); background: var(--surface);
   border-radius: 9px; padding: 7px 13px; cursor: pointer; text-decoration: none; white-space: nowrap; }

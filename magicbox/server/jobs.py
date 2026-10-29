@@ -50,6 +50,7 @@ class Job:
     detections: list[str] = field(default_factory=list)
     llm_verdict: str = ""
     ioc_count: int = 0
+    created_by: str = ""
 
     def public(self) -> dict:
         d = asdict(self)
@@ -143,7 +144,8 @@ class JobManager:
         with self._lock:
             return self.jobs[job_id]
 
-    def create(self, name: str, stream: BinaryIO, size: int, password: str = "", profile: str = "") -> Job:
+    def create(self, name: str, stream: BinaryIO, size: int, password: str = "", profile: str = "",
+               user: str = "") -> Job:
         job_id = uuid.uuid4().hex[:12]
         d = self.job_dir(job_id)
         (d / "sample").mkdir(parents=True)
@@ -165,7 +167,7 @@ class JobManager:
         os.chmod(target, 0o400)  # nie ausführbar
         job = Job(id=job_id, name=os.path.basename(name.replace("\\", "/")) or fname, sample=fname, size=size,
                   sha256=h.hexdigest(), created=time.time(), profile=profile or self.settings.profile,
-                  password=password)
+                  password=password, created_by=user)
         with self._lock:
             self.jobs[job_id] = job
             self._save(job)
@@ -175,7 +177,7 @@ class JobManager:
 
     def create_from_file(self, path: Path, profile: str = "") -> Job:
         with open(path, "rb") as f:
-            return self.create(path.name, f, path.stat().st_size, profile=profile)
+            return self.create(path.name, f, path.stat().st_size, profile=profile, user="Drop-Ordner")
 
     def cancel(self, job_id: str) -> None:
         with self._lock:

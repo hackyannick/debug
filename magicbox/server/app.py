@@ -19,10 +19,10 @@ from magicbox import __version__, tools
 from magicbox.config import Settings
 from magicbox.llm.client import LLMClient, LLMError
 
+from .auth import COOKIE, AuthFailed, Authenticator, Forbidden, Identity
 from .jobs import FolderWatcher, JobManager
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
-COOKIE = "mb_token"
 # Über die Web-Oberfläche änderbare Einstellungen (Netzwerk/Zugang bewusst nicht)
 EDITABLE = {
     "use_llm", "provider", "base_url", "model", "api_key", "context_tokens", "max_answer_tokens", "temperature",
@@ -48,6 +48,7 @@ class MagicBoxServer:
         self.settings = settings
         self.config_path = config_path
         self.token = settings.web_token if token is None else token
+        self.auth = Authenticator(settings, self.token)
         self.manager = JobManager(settings)
         self.httpd = ThreadingHTTPServer((host or settings.host, settings.port if port is None else port),
                                          self._handler_class())
@@ -146,23 +147,20 @@ class MagicBoxServer:
             def _query(self) -> dict[str, str]:
                 return {k: v[-1] for k, v in urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query).items()}
 
-            def _cookie_token(self) -> str:
-                for part in (self.headers.get("Cookie") or "").split(";"):
-                    k, _, v = part.strip().partition("=")
-                    if k == COOKIE:
-                        return urllib.parse.unquote(v)
-                return ""
+            def _return_to(self) -> str:
+                """Adresse, zu der der Browser nach dem Login zurückkehrt."""
+                if server.settings.public_url:
+                    return server.settings.public_url.rstrip("/") + "/"
+                proto = self.headers.get("X-Forwarded-Proto", "http").split(",")[0].strip() or "http"
+                host = self.headers.get("X-Forwarded-Host") or self.headers.get("Host") or "127.0.0.1"
+                return f"{proto}://{host.split(',')[0].strip()}/"
 
-            def _authorized(self) -> bool:
-                if not server.token:
-                    return True
-                auth = self.headers.get("Authorization", "")
-                given = auth[7:] if auth.startswith("Bearer ") else self._cookie_token()
-                return bool(given) and hmac.compare_digest(given.encode(), server.token.encode())
+            def _identify(self) -> Identity:
+                return server.auth.authenticate(self.headers, self._return_to())
 
             def _host_ok(self) -> bool:
-                """Schutz vor DNS-Rebinding: ohne Token nur Zugriffe per IP, localhost oder Rechnername."""
-                if server.token:
+                """Schutz vor DNS-Rebinding: ohne Anmeldung nur Zugriffe per IP, localhost oder Rechnername."""
+                if server.auth.protects:
                     return True
                 host = (self.headers.get("Host") or "").rsplit(":", 1)[0].strip("[]").lower()
                 if host in ("localhost", socket.gethostname().lower(), socket.getfqdn().lower()):
@@ -198,14 +196,22 @@ class MagicBoxServer:
                 try:
                     if not self._host_ok():
                         return self._error(403, "Unbekannter Hostname – Zugriff per IP oder Zugangsschlüssel (web_token) einrichten.")
-                    if method == "GET" and (path == "/" or path.startswith("/static/")):
+                    if method == "GET" and path.startswith("/static/"):
                         return self._static(path)
+                    if method == "GET" and path == "/":
+                        return self._index()
+                    if method == "GET" and path == "/auth/logout":
+                        return self._logout()
                     if not path.startswith("/api/"):
                         return self._error(404, "Nicht gefunden")
                     if path == "/api/login" and method == "POST":
                         return self._login()
-                    if not self._authorized():
-                        return self._error(401, "Zugangsschlüssel erforderlich")
+                    try:
+                        self.identity = self._identify()
+                    except AuthFailed as exc:
+                        return self._json({"error": str(exc), "login_url": exc.login_url, "mode": server.auth.mode}, 401)
+                    except Forbidden as exc:
+                        return self._error(403, str(exc))
                     if method != "GET" and not self._csrf_ok():
                         return self._error(403, "Fehlender X-MagicBox-Header")
                     return self._api(method, path)
@@ -218,14 +224,33 @@ class MagicBoxServer:
                 except Exception as exc:  # noqa: BLE001
                     return self._error(500, f"{exc.__class__.__name__}: {exc}")
 
-            def _static(self, path: str) -> None:
+            def _index(self) -> None:
                 q = self._query()
-                if path == "/" and q.get("token") and server.token:
+                if q.get("token") and server.token:
                     # Einmal-Login per Link (z. B. aus der Desktop-App): Cookie setzen und Token aus der URL entfernen
                     if hmac.compare_digest(q["token"].encode(), server.token.encode()):
                         cookie = f"{COOKIE}={urllib.parse.quote(server.token)}; HttpOnly; SameSite=Strict; Path=/"
                         return self._send(303, b"", "text/plain", {"Location": "/", "Set-Cookie": cookie})
-                name = "index.html" if path == "/" else path[len("/static/"):]
+                if server.auth.mode != "token":
+                    # Bei Ory direkt zum Login weiterleiten statt eine leere Oberfläche zu zeigen
+                    try:
+                        self._identify()
+                    except AuthFailed as exc:
+                        if exc.login_url:
+                            return self._send(303, b"", "text/plain", {"Location": exc.login_url})
+                        return self._send(401, _page("Anmeldung erforderlich", str(exc)), "text/html; charset=utf-8")
+                    except Forbidden as exc:
+                        return self._send(403, _page("Kein Zugriff", f"{exc} <a href='/auth/logout'>Abmelden</a>"),
+                                          "text/html; charset=utf-8")
+                return self._static("/static/index.html")
+
+            def _logout(self) -> None:
+                target = server.auth.logout_url(self.headers, self._return_to()) or "/"
+                clear = f"{COOKIE}=; Max-Age=0; HttpOnly; SameSite=Strict; Path=/"
+                return self._send(303, b"", "text/plain", {"Location": target, "Set-Cookie": clear})
+
+            def _static(self, path: str) -> None:
+                name = path[len("/static/"):]
                 target = (WEB_DIR / name).resolve()
                 if WEB_DIR not in target.parents or not target.is_file():
                     return self._error(404, "Nicht gefunden")
@@ -247,12 +272,16 @@ class MagicBoxServer:
                 parts = path.strip("/").split("/")[1:]  # ohne "api"
                 if parts == ["status"]:
                     s = server.settings
+                    ident = self.identity
                     return self._json({
                         "version": __version__,
                         "llm": {"enabled": s.use_llm, "provider": s.provider, "url": s.base_url, "model": s.model},
                         "profile": s.profile,
                         "tools": [asdict(t) for t in tools.status(s)],
-                        "auth": bool(server.token),
+                        "auth": server.auth.protects,
+                        "auth_mode": server.auth.mode,
+                        "user": {"name": ident.name, "method": ident.method},
+                        "can_logout": ident.method != "none",
                     })
                 if parts == ["events"] and method == "GET":
                     return self._events()
@@ -318,7 +347,8 @@ class MagicBoxServer:
                     return self._error(413, f"Datei größer als {server.settings.max_upload_mb} MB")
                 name = q.get("name") or "probe"
                 profile = q.get("profile", "") if q.get("profile") in ("malware", "allgemein") else ""
-                job = server.manager.create(name, self.rfile, size, password=q.get("password", ""), profile=profile)
+                job = server.manager.create(name, self.rfile, size, password=q.get("password", ""), profile=profile,
+                                            user=self.identity.name)
                 return self._json(job.public(), 201)
 
             def _events(self) -> None:
@@ -348,14 +378,25 @@ class MagicBoxServer:
         return Handler
 
 
+def _page(title: str, body: str) -> bytes:
+    import html as _html
+
+    return (f"<!doctype html><meta charset='utf-8'><title>{_html.escape(title)}</title>"
+            f"<body style='font-family:system-ui;max-width:640px;margin:15vh auto;padding:0 16px'>"
+            f"<h1>🪄 {_html.escape(title)}</h1><p>{body}</p></body>").encode()
+
+
 def serve(settings: Settings, host: str | None = None, port: int | None = None, watch: list[Path] | None = None,
           config_path: Path | None = None) -> None:
     srv = MagicBoxServer(settings, host=host, port=port, config_path=config_path)
     for folder in watch or []:
         srv.watch(folder)
     print(f"🪄 Magic Box {__version__} läuft auf {srv.url}  (Daten: {srv.manager.root})")
-    if srv.httpd.server_address[0] not in ("127.0.0.1", "::1") and not srv.token:
-        print("⚠  Server ist im Netzwerk erreichbar, aber ohne Zugangsschlüssel. Empfohlen: web_token in der Konfiguration setzen.")
+    print(f"   Anmeldung: {srv.auth.mode}")
+    if srv.httpd.server_address[0] not in ("127.0.0.1", "::1") and not srv.auth.protects:
+        print("⚠  Server ist im Netzwerk erreichbar, aber ohne Anmeldung. Empfohlen: web_token oder auth_mode (Ory) setzen.")
+    if srv.auth.mode == "oathkeeper" and srv.httpd.server_address[0] not in ("127.0.0.1", "::1"):
+        print("⚠  auth_mode=oathkeeper: Magic Box sollte nur auf 127.0.0.1 lauschen und ausschließlich über Oathkeeper erreichbar sein.")
     try:
         srv.serve_forever()
     except KeyboardInterrupt:

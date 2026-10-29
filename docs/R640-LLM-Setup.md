@@ -140,7 +140,12 @@ sudo ufw enable
 (Netz an dein LAN anpassen; SSH-Regel nur, wenn du sie brauchst. Ollama ist ohnehin nur lokal erreichbar.)
 Updates später wieder über ein neues Offline-Bundle oder kurzzeitig geöffneten Ausgang.
 
-## 6. Benutzen
+## 6. Anmeldung über Ory
+
+Statt des Zugangsschlüssels kann die Magic Box deinen Ory-Stack nutzen (gleicher Login wie für deine anderen
+Dienste, inkl. Captcha und 2FA): siehe [Ory-Anmeldung.md](Ory-Anmeldung.md).
+
+## 7. Benutzen
 
 - **Browser:** `http://<server>:8765/?token=<schlüssel>`
 - **Desktop-App** (Windows/Linux/macOS): `scripts/start_windows.bat` bzw. `scripts/start_linux.sh`, dann

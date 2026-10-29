@@ -103,8 +103,11 @@ Oberfläche oben unter **🧰 Werkzeuge**.
 
 - **Nie ausgeführt:** alles ist statische Analyse. Proben werden ohne Ausführungsrechte gespeichert und nie
   wieder ausgeliefert (nur Berichte).
-- **Server-Härtung:** systemd-Sandbox (read-only System, kein Home, eigene /tmp), Zugangsschlüssel,
-  CSRF-Schutz, Schutz vor DNS-Rebinding, Content-Security-Policy.
+- **Anmeldung:** Zugangsschlüssel oder dein **Ory-Stack** (Kratos-Sitzung bzw. Oathkeeper-ID-Token) – inkl.
+  Captcha/2FA aus deinem Login-UI, Freigabe nach E-Mail/Domain, optional nur mit zweitem Faktor.
+  Anleitung: [docs/Ory-Anmeldung.md](docs/Ory-Anmeldung.md).
+- **Server-Härtung:** systemd-Sandbox (read-only System, kein Home, eigene /tmp), CSRF-Schutz,
+  Schutz vor DNS-Rebinding, Content-Security-Policy.
 - **Berichte sind sicher zu öffnen:** kein HTML/JavaScript aus Probe oder KI-Antwort, IOCs entschärft,
   Bericht in einem abgeschotteten iframe.
 - **Netz:** Ollama nur auf localhost; für echten Offline-Betrieb ausgehenden Verkehr am Server sperren.
@@ -143,7 +146,7 @@ magicbox/
 ├── yara_rules/  mitgelieferte Basisregeln
 ├── llm/         Client (Ollama/OpenAI-kompatibel), Prompts (Profile), Map-Reduce-Dokumentierer
 ├── report/      Bericht (HTML/MD/JSON/CSV)
-├── server/      HTTP-API, Live-Ereignisse, Auftragsverwaltung, Drop-Ordner
+├── server/      HTTP-API, Live-Ereignisse, Auftragsverwaltung, Drop-Ordner, Anmeldung (Token/Ory)
 ├── web/         Oberfläche (HTML/CSS/JS, ohne Abhängigkeiten)
 ├── gui/         Desktop-App (Qt WebEngine)
 ├── engine.py · pipeline.py · tools.py · cli.py

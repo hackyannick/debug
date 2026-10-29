@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import secrets
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 ICON_SVG = (b"<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' rx='14' "
@@ -41,7 +42,8 @@ def main(argv: list[str] | None = None, server_url: str | None = None) -> int:
         from magicbox.server import MagicBoxServer
 
         # Eingebetteter Server nur auf localhost, geschützt durch einen zufälligen Einmal-Schlüssel
-        embedded = MagicBoxServer(settings, host="127.0.0.1", port=0, token=secrets.token_urlsafe(24))
+        local = replace(settings, auth_mode="token")
+        embedded = MagicBoxServer(local, host="127.0.0.1", port=0, token=secrets.token_urlsafe(24))
         embedded.start_background()
         start_url = f"{embedded.url}/?token={embedded.token}"
         where = "lokal (eingebauter Server)"
@@ -55,6 +57,8 @@ def main(argv: list[str] | None = None, server_url: str | None = None) -> int:
     pix.loadFromData(ICON_SVG, "SVG")
     app.setWindowIcon(QIcon(pix))
 
+    base = QUrl(start_url)
+    app_hosts = {(base.host(), base.port())}
     profile = QWebEngineProfile("magicbox")  # eigenes, persistentes Profil (Cookie für den Login bleibt erhalten)
 
     class Page(QWebEnginePage):
@@ -72,11 +76,15 @@ def main(argv: list[str] | None = None, server_url: str | None = None) -> int:
             return view.page()
 
         def acceptNavigationRequest(self, qurl, nav_type, is_main_frame):
-            # Externe Links (z. B. Doku-Links im Bericht) im System-Browser öffnen, nicht im App-Fenster
-            base = QUrl(start_url)
-            if qurl.scheme() in ("http", "https") and (qurl.host(), qurl.port()) != (base.host(), base.port()):
-                QDesktopServices.openUrl(qurl)
-                return False
+            # Vom Nutzer angeklickte externe Links im System-Browser öffnen. Weiterleitungen und Formulare
+            # (z. B. Ory-Login mit Captcha auf auth.example.de) bleiben im App-Fenster, damit der Login klappt.
+            # Hosts, die per Weiterleitung erreicht wurden (Login-UI), gelten danach als „App-intern“.
+            host = (qurl.host(), qurl.port())
+            if qurl.scheme() in ("http", "https") and host not in app_hosts:
+                if nav_type == QWebEnginePage.NavigationType.NavigationTypeLinkClicked:
+                    QDesktopServices.openUrl(qurl)
+                    return False
+                app_hosts.add(host)
             return super().acceptNavigationRequest(qurl, nav_type, is_main_frame)
 
     def on_download(item):

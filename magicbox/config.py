@@ -72,7 +72,19 @@ class Settings:
     data_dir: str = ""
     host: str = "127.0.0.1"
     port: int = 8765
-    web_token: str = ""  # wenn gesetzt, verlangt die Web-Oberfläche diesen Zugangsschlüssel
+    web_token: str = ""  # wenn gesetzt, verlangt die Web-Oberfläche diesen Zugangsschlüssel (auch für Skripte/API)
+
+    # Anmeldung: "token" (Zugangsschlüssel) | "kratos" (Ory-Kratos-Session) | "oathkeeper" (Ory-Oathkeeper-JWT)
+    auth_mode: str = "token"
+    public_url: str = ""  # externe Adresse der Magic Box (für Rücksprung nach dem Login), z. B. https://magicbox.example.de
+    kratos_public_url: str = ""  # Kratos Public API, von der Magic Box aus erreichbar, z. B. http://127.0.0.1:4433
+    kratos_browser_url: str = ""  # Kratos Public API aus Sicht des Browsers (leer = kratos_public_url)
+    oathkeeper_jwks_url: str = ""  # z. B. http://127.0.0.1:4456/.well-known/jwks.json
+    oathkeeper_issuer: str = ""  # erwarteter "iss" im ID-Token (leer = nicht prüfen)
+    oathkeeper_audience: str = ""  # erwartetes "aud" im ID-Token (leer = nicht prüfen)
+    auth_login_url: str = ""  # optional: eigene Login-Seite statt des Kratos-Browser-Flows
+    auth_allowed: list[str] = field(default_factory=list)  # E-Mails oder "@domain"; leer = alle Angemeldeten
+    auth_require_aal2: bool = False  # nur Sitzungen mit zweitem Faktor (Kratos AAL2) zulassen
     max_upload_mb: int = 2048
 
     # Desktop-App: leer = eingebauter lokaler Server, sonst z. B. http://r640:8765

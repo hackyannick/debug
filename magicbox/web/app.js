@@ -18,11 +18,11 @@ async function api(path, opts = {}) {
     opts.body = JSON.stringify(opts.json);
   }
   const res = await fetch(path, { ...opts, headers, credentials: "same-origin" });
+  const data = res.headers.get("Content-Type")?.includes("json") ? await res.json() : await res.text();
   if (res.status === 401) {
-    showLogin();
+    needLogin(data);
     throw new Error("Anmeldung erforderlich");
   }
-  const data = res.headers.get("Content-Type")?.includes("json") ? await res.json() : await res.text();
   if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
   return data;
 }
@@ -65,6 +65,10 @@ async function loadStatus() {
   llm.querySelector(".dot").className = "dot " + (s.llm.enabled ? "" : "off");
   const ok = s.tools.filter((t) => t.path).length;
   $("#pill-tools").querySelector(".label").textContent = `🧰 Werkzeuge ${ok}/${s.tools.length}`;
+  const user = $("#user");
+  user.classList.toggle("hidden", s.user.method === "none");
+  $("#user-name").textContent = s.user.method === "token" ? "🔑 Zugangsschlüssel" : `👤 ${s.user.name}`;
+  $("#user-name").title = s.auth_mode === "token" ? "" : `Angemeldet über Ory (${s.auth_mode})`;
   renderTools(s.tools);
   if (s.llm.enabled) checkLLM(true);
 }
@@ -155,7 +159,7 @@ function renderJob(fresh = false) {
   $("#job-name").textContent = j.name;
   const meta = $("#job-meta");
   meta.replaceChildren();
-  meta.append(`${j.description || "…"} · ${fmtSize(j.size)} · `);
+  meta.append(`${j.description || "…"} · ${fmtSize(j.size)}${j.created_by ? ` · von ${j.created_by}` : ""} · `);
   const sha = el("code", "", j.sha256);
   sha.title = "Klicken zum Kopieren";
   sha.addEventListener("click", () => navigator.clipboard?.writeText(j.sha256).then(() => toast("SHA-256 kopiert")));
@@ -259,7 +263,7 @@ function upload(file) {
       upsertJob(data);
       selectJob(data.id);
     } else if (xhr.status === 401) {
-      showLogin();
+      needLogin(data);
     } else {
       toast(`${file.name}: ${data.error || "Upload fehlgeschlagen"}`, true);
     }
@@ -401,6 +405,16 @@ function setupSettings() {
 }
 
 // ------------------------------------------------------------------ Login
+function needLogin(data) {
+  // Ory (Kratos/Oathkeeper): zum Login-Flow weiterleiten; sonst Zugangsschlüssel abfragen
+  if (data && data.login_url) location.href = data.login_url;
+  else if (data && data.mode === "token") showLogin();
+  else if (data && data.mode) toast(data.error || "Anmeldung erforderlich", true);
+  // 401 kam nicht von der Magic Box (z. B. Oathkeeper, Sitzung abgelaufen): Seite neu laden,
+  // dann leitet der Proxy zum Login weiter
+  else location.reload();
+}
+
 function showLogin() {
   const dlg = $("#dlg-login");
   if (!dlg.open) dlg.showModal();
