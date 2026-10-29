@@ -53,9 +53,13 @@ def main(argv: list[str] | None = None, server_url: str | None = None) -> int:
 
     app = QApplication(sys.argv[:1] + (argv or []))
     app.setApplicationName("Magic Box")
-    pix = QPixmap()
-    pix.loadFromData(ICON_SVG, "SVG")
-    app.setWindowIcon(QIcon(pix))
+    icon_file = Path(__file__).resolve().parent.parent / "assets" / "magicbox.png"
+    if icon_file.exists():
+        app.setWindowIcon(QIcon(str(icon_file)))
+    else:
+        pix = QPixmap()
+        pix.loadFromData(ICON_SVG, "SVG")
+        app.setWindowIcon(QIcon(pix))
 
     base = QUrl(start_url)
     app_hosts = {(base.host(), base.port())}

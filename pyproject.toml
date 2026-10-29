@@ -35,7 +35,7 @@ magicbox-desktop = "magicbox.gui.app:main"
 include = ["magicbox*"]
 
 [tool.setuptools.package-data]
-magicbox = ["report/*.css", "web/*", "yara_rules/*.yar"]
+magicbox = ["report/*.css", "web/*", "yara_rules/*.yar", "assets/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -94,6 +94,16 @@ Details: [docs/R640-LLM-Setup.md](docs/R640-LLM-Setup.md).
 
 ### Desktop-App
 
+**Windows-Installer:** `MagicBox-Setup-<Version>.exe` – fragt bei der Installation die Server-Adresse ab
+(vorbelegt `https://magicbox.hackdv.com`), legt Startmenü-/Desktop-Verknüpfung an und braucht keine Adminrechte.
+Die App enthält alles (Python, Qt, Chromium-Engine) – auf dem PC muss nichts vorinstalliert sein.
+Gebaut wird der Installer automatisch per GitHub Actions (Workflow „Desktop-Installer (Windows)“, Download unter
+*Actions → Artefakte*; bei Tags `v*` zusätzlich am Release). Lokal unter Windows:
+`powershell -ExecutionPolicy Bypass -File packaging\build_installer.ps1`.
+Stille Verteilung: `MagicBox-Setup-0.1.0.exe /VERYSILENT /SERVER=https://magicbox.hackdv.com`.
+
+**Ohne Installer:**
+
 **Windows:** Doppelklick auf `scripts\start_windows.bat` · **Linux/macOS:** `./scripts/start_linux.sh`
 
 Dann im Menü **Magic Box → Server wechseln …** die Adresse des R640 eintragen (z. B. `http://r640:8765`) oder direkt:
@@ -175,5 +185,6 @@ magicbox/
 ├── web/         Oberfläche (HTML/CSS/JS, ohne Abhängigkeiten)
 ├── gui/         Desktop-App (Qt WebEngine)
 ├── engine.py · pipeline.py · tools.py · cli.py
+packaging/       Desktop-Installer: PyInstaller-Spezifikation, Inno-Setup-Skript, Symbol
 scripts/         easy-setup.sh · install_server.sh · make_offline_bundle.sh · magicbox-server.service · Startskripte
 ```

@@ -27,6 +27,22 @@ def default_data_dir() -> str:
     return str(Path.home() / "MagicBox" / "Daten")
 
 
+def install_defaults() -> dict:
+    """Vorgaben des Installers (z. B. Server-Adresse) aus ``magicbox-defaults.json`` neben der Programmdatei."""
+    candidates = []
+    if os.environ.get("MAGICBOX_DEFAULTS"):
+        candidates.append(Path(os.environ["MAGICBOX_DEFAULTS"]))
+    if getattr(sys, "frozen", False):  # PyInstaller-Build
+        candidates.append(Path(sys.executable).resolve().parent / "magicbox-defaults.json")
+    for c in candidates:
+        try:
+            data = json.loads(c.read_text(encoding="utf-8-sig"))  # Inno Setup schreibt ggf. mit BOM
+            return data if isinstance(data, dict) else {}
+        except (OSError, ValueError):
+            continue
+    return {}
+
+
 @dataclass
 class Settings:
     # LLM
@@ -120,12 +136,13 @@ class Settings:
 
     @classmethod
     def load(cls, path: Path | None = None) -> "Settings":
+        """Lädt die Benutzereinstellungen; gibt es noch keine, gelten die Vorgaben aus der Installation."""
+        known = {f.name for f in fields(cls)}
         path = path or config_dir() / "settings.json"
         try:
             raw = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
-            return cls()
-        known = {f.name for f in fields(cls)}
+            raw = install_defaults()
         return cls(**{k: v for k, v in raw.items() if k in known})
 
     def save(self, path: Path | None = None) -> Path:
