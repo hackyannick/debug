@@ -1,6 +1,6 @@
-﻿; Inno-Setup-Skript für die Magic-Box-Desktop-App (Windows)
+﻿; Inno-Setup-Skript für die Magic-Box-Desktop-App (native Windows-App, WinForms/.NET Framework 4.8)
 ;
-; Bauen (nach PyInstaller):  iscc /DAppVersion=0.1.0 packaging\installer.iss
+; Bauen (nach „dotnet build desktop\MagicBox -c Release“):  iscc /DAppVersion=0.1.0 packaging\installer.iss
 ; Ergebnis:                  dist\MagicBox-Setup-<Version>.exe
 ;
 ; Stille Installation, z. B. per Softwareverteilung:
@@ -27,8 +27,9 @@ DisableProgramGroupPage=yes
 ; Standardmäßig ohne Adminrechte installierbar, auf Wunsch für alle Benutzer
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog commandline
-ArchitecturesAllowed=x64
-ArchitecturesInstallIn64BitMode=x64
+; .NET Framework 4.8 (AnyCPU): auf Windows 10/11 vorinstalliert, läuft auf x64 und ARM64
+ArchitecturesInstallIn64BitMode=x64compatible
+MinVersion=6.1sp1
 OutputDir=..\dist
 OutputBaseFilename=MagicBox-Setup-{#AppVersion}
 SetupIconFile=..\magicbox\assets\magicbox.ico
@@ -48,7 +49,12 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
 
 [Files]
-Source: "..\dist\MagicBox\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\desktop\MagicBox\bin\Release\net48\MagicBox.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\desktop\MagicBox\bin\Release\net48\MagicBox.exe.config"; DestDir: "{app}"; Flags: ignoreversion
+
+[InstallDelete]
+; Reste der früheren, gebündelten Python/Qt-Version entfernen
+Type: filesandordirs; Name: "{app}\_internal"
 
 [Icons]
 Name: "{autoprograms}\Magic Box"; Filename: "{app}\MagicBox.exe"; Comment: "Dateien analysieren und dokumentieren"
@@ -69,9 +75,9 @@ begin
   ServerPage := CreateInputQueryPage(wpSelectDir,
     'Magic-Box-Server',
     'Mit welchem Server soll sich die App verbinden?',
-    'Adresse deines Magic-Box-Servers (die Anmeldung läuft dann über dessen Login, z. B. Ory). ' +
-    'Leer lassen, um die Analyse lokal auf diesem PC laufen zu lassen.' + #13#10 + #13#10 +
-    'Ändern lässt sich das später in der App unter „Magic Box → Server wechseln …“.');
+    'Adresse deines Magic-Box-Servers. Die Analyse läuft dort; die App spricht über die REST-API mit ihm ' +
+    'und meldet sich beim ersten Start über den Browser an (z. B. Ory mit Captcha).' + #13#10 + #13#10 +
+    'Ändern lässt sich das später in der App unter „Extras → Verbindung …“.');
   ServerPage.Add('Server-Adresse:', False);
   ServerPage.Values[0] := ExpandConstant('{param:SERVER|{#DefaultServer}}');
 end;
@@ -84,11 +90,29 @@ begin
   if CurPageID = ServerPage.ID then
   begin
     Url := Trim(ServerPage.Values[0]);
-    if (Url <> '') and (Pos('http://', Lowercase(Url)) <> 1) and (Pos('https://', Lowercase(Url)) <> 1) then
+    if (Pos('http://', Lowercase(Url)) <> 1) and (Pos('https://', Lowercase(Url)) <> 1) then
     begin
       MsgBox('Bitte die Adresse mit http:// oder https:// angeben, z. B. https://magicbox.hackdv.com', mbError, MB_OK);
       Result := False;
     end;
+  end;
+end;
+
+{ .NET Framework 4.8 vorhanden? (Release >= 528040; ab Windows 10 Mai 2019 eingebaut) }
+function InitializeSetup: Boolean;
+var
+  Release: Cardinal;
+begin
+  Result := True;
+  if not RegQueryDWordValue(HKLM, 'SOFTWARE\Microsoft\NET Framework Setup\NDP\v4\Full', 'Release', Release) or
+     (Release < 528040) then
+  begin
+    if WizardSilent then
+      Log('Warnung: .NET Framework 4.8 nicht gefunden')
+    else if MsgBox('Magic Box benötigt das .NET Framework 4.8 (bei Windows 10/11 normalerweise schon vorhanden).' + #13#10 +
+              'Es wurde nicht gefunden. Trotzdem installieren?' + #13#10 + #13#10 +
+              'Download: https://dotnet.microsoft.com/download/dotnet-framework/net48', mbConfirmation, MB_YESNO) = IDNO then
+      Result := False;
   end;
 end;
 

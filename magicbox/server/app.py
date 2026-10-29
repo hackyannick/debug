@@ -19,6 +19,7 @@ from pathlib import Path
 from magicbox import __version__, tools
 from magicbox.config import Settings
 from magicbox.llm.client import LLMClient, LLMError
+from magicbox.report.builder import build_classic_html
 
 from .auth import COOKIE, AuthFailed, Authenticator, Forbidden, Identity
 from .oidc import SESSION_COOKIE, STATE_COOKIE, OIDCError
@@ -207,6 +208,15 @@ class MagicBoxServer:
                         return self._logout()
                     if method == "GET" and path in ("/auth/login", "/auth/callback") and server.auth.oidc:
                         return self._oidc_login() if path == "/auth/login" else self._oidc_callback()
+                    if method == "GET" and path == "/auth/info":
+                        return self._json({"version": __version__, "mode": server.auth.mode,
+                                           "login": server.auth.desktop_login})
+                    if path == "/auth/desktop" and method in ("GET", "POST"):
+                        return self._desktop_approve(method)
+                    if path == "/auth/desktop/token" and method == "POST":
+                        body = self._body_json()
+                        return self._json(server.auth.desktop.exchange(
+                            str(body.get("code", "")), str(body.get("verifier", "")), str(body.get("label", ""))))
                     if not path.startswith("/api/"):
                         return self._error(404, "Nicht gefunden")
                     if path == "/api/login" and method == "POST":
@@ -249,6 +259,65 @@ class MagicBoxServer:
                         return self._send(403, _page("Kein Zugriff", f"{html.escape(str(exc))} <a href='/auth/logout'>Abmelden</a>"),
                                           "text/html; charset=utf-8")
                 return self._static("/static/index.html")
+
+            def _form(self) -> dict[str, str]:
+                n = int(self.headers.get("Content-Length") or 0)
+                if n > 65536:
+                    raise ValueError("Anfrage zu groß")
+                raw = self.rfile.read(n).decode("utf-8", "replace")
+                return {k: v[-1] for k, v in urllib.parse.parse_qs(raw).items()}
+
+            def _desktop_approve(self, method: str) -> None:
+                """Browser-Teil der Desktop-Anmeldung: Login (Ory) → Bestätigung → Rücksprung zur App."""
+                desk = server.auth.desktop
+                html_type = "text/html; charset=utf-8"
+                q = self._query() if method == "GET" else self._form()
+                try:
+                    port, state, challenge = desk.parse_request(q)
+                except ValueError as exc:
+                    return self._send(400, _page("Anmeldung fehlgeschlagen", html.escape(str(exc))), html_type)
+                if server.auth.desktop_login != "browser":
+                    return self._send(400, _page("Anmeldung über die App", "Dieser Server nutzt einen Zugangsschlüssel – "
+                                                 "bitte direkt in der Desktop-App eingeben."), html_type)
+                return_to = self._return_to().rstrip("/") + "/auth/desktop?" + urllib.parse.urlencode(
+                    {"port": port, "state": state, "challenge": challenge})
+                try:
+                    ident = server.auth.authenticate(self.headers, return_to)
+                except AuthFailed as exc:
+                    if exc.login_url and method == "GET":
+                        return self._send(303, b"", "text/plain", {"Location": exc.login_url})
+                    return self._send(401, _page("Anmeldung erforderlich", html.escape(str(exc))), html_type)
+                except Forbidden as exc:
+                    return self._send(403, _page("Kein Zugriff", html.escape(str(exc))), html_type)
+                if ident.method == "desktop":  # ein App-Token darf keine weiteren Tokens ausstellen
+                    return self._send(403, _page("Kein Zugriff", "Bitte im Browser anmelden."), html_type)
+                if method == "POST":
+                    if not desk.check_csrf(ident, port, state, challenge, q.get("csrf", "")):
+                        return self._send(403, _page("Anmeldung fehlgeschlagen", "Bestätigung ungültig oder abgelaufen – "
+                                                     "bitte die Anmeldung in der App neu starten."), html_type)
+                    if q.get("decision") != "allow":
+                        target = desk.callback(port, {"error": "access_denied", "state": state})
+                    else:
+                        target = desk.approve(ident, port, state, challenge)
+                    return self._send(303, b"", "text/plain", {"Location": target})
+                hidden = "".join(f"<input type='hidden' name='{k}' value='{html.escape(str(v), quote=True)}'>"
+                                 for k, v in (("port", port), ("state", state), ("challenge", challenge),
+                                              ("csrf", desk.csrf(ident, port, state, challenge))))
+                btn = ("padding:8px 18px;border-radius:6px;font:inherit;cursor:pointer;margin-right:8px;"
+                       "border:1px solid {b};background:{bg};color:#fff")
+                body = (f"<p>Die <b>Magic-Box-Desktop-App</b> auf diesem PC möchte im Namen von "
+                        f"<b>{html.escape(ident.name)}</b> auf die Magic Box zugreifen.</p>"
+                        "<p style='color:#8b94a5'>Nur zulassen, wenn du die Anmeldung gerade selbst in der App "
+                        f"gestartet hast. Die Anmeldung gilt {server.settings.desktop_session_days} Tage und endet "
+                        "mit „Abmelden“ in der App.</p>"
+                        f"<form method='post' action='/auth/desktop'>{hidden}"
+                        f"<button name='decision' value='allow' style='{btn.format(b='#0b5ed7', bg='#0b5ed7')}'>"
+                        "Zulassen</button>"
+                        f"<button name='decision' value='deny' style='{btn.format(b='#313847', bg='#171b23')}'>"
+                        "Abbrechen</button></form>")
+                return self._send(200, _page("Desktop-App anmelden", body), html_type,
+                                  {"Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; "
+                                   "form-action 'self' http://127.0.0.1:*; frame-ancestors 'none'"})
 
             def _logout(self) -> None:
                 clear = [f"{COOKIE}=; Max-Age=0; HttpOnly; SameSite=Strict; Path=/"]
@@ -324,6 +393,10 @@ class MagicBoxServer:
                         "user": {"name": ident.name, "method": ident.method},
                         "can_logout": ident.method != "none",
                     })
+                if parts == ["logout"] and method == "POST":  # Desktop-App: eigenes Token widerrufen
+                    auth = self.headers.get("Authorization", "")
+                    revoked = server.auth.desktop.revoke(auth[7:].strip()) if auth.startswith("Bearer ") else False
+                    return self._json({"ok": True, "revoked": revoked})
                 if parts == ["events"] and method == "GET":
                     return self._events()
                 if parts == ["settings"]:
@@ -375,6 +448,13 @@ class MagicBoxServer:
                         except RuntimeError as exc:
                             return self._error(409, str(exc))
                         return self._json(job.public())
+                    if action == "report.classic" and method == "GET":  # für die Windows-App (IE-Engine)
+                        f = m.job_dir(job_id) / "report" / "bericht.md"
+                        if not f.is_file():
+                            return self._error(404, "Bericht noch nicht fertig")
+                        page = build_classic_html(f.read_text(encoding="utf-8"), m.get(job_id).name)
+                        return self._send(200, page.encode(), "text/html; charset=utf-8",
+                                          {"Content-Security-Policy": REPORT_CSP})
                     if action in REPORT_FILES and method == "GET":
                         m.get(job_id)
                         rel, ctype, download = REPORT_FILES[action]

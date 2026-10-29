@@ -207,11 +207,23 @@ Browser und Desktop-App im LAN müssen `magicbox.hackdv.com` **und** `id.hackdv.
 die öffentliche Adresse klappt das intern nicht. Lösung wie vermutlich schon für OWA: lokale DNS-Einträge (Router,
 Pi-hole, AD-DNS) `magicbox.hackdv.com` und `id.hackdv.com` → LAN-IP von shieldy.
 
-### 7. Desktop-App
+### 7. Desktop-App (Windows, nativ)
 
-*Magic Box → Server wechseln …* → `https://magicbox.hackdv.com`. Captcha, Kratos-Login und TOTP erscheinen im
-App-Fenster; die Sitzung bleibt bis zu `oidc_session_hours` erhalten (auch über Neustarts des Servers).
-„Abmelden“ oben rechts beendet die Magic-Box-Sitzung und die Hydra-Sitzung.
+Keine Änderung an Hydra/owa-gate nötig – die App nutzt den bestehenden Client der Magic Box:
+
+1. Die App öffnet im **System-Browser** `https://magicbox.hackdv.com/auth/desktop?port=…&state=…&challenge=…`.
+2. Ohne Browser-Sitzung folgt der normale Login (Captcha → Kratos → TOTP → Consent) wie im Web.
+3. Die Magic Box zeigt „Desktop-App anmelden?“ – nach **Zulassen** springt der Browser zu
+   `http://127.0.0.1:<port>/callback` (die App lauscht dort kurz) mit einem Einmal-Code (2 Minuten gültig).
+4. Die App tauscht Code + PKCE-verifier bei `POST /auth/desktop/token` gegen ein API-Token `mbd_…`
+   (Gültigkeit `desktop_session_days`, Standard 30) und ruft die API mit `Authorization: Bearer …` auf.
+
+Die Tokens liegen auf dem Server nur als Hash in `desktop_sessions.json`; `auth_allowed`/`auth_groups` werden bei
+jedem Aufruf erneut geprüft. *Datei → Abmelden* in der App widerruft das Token. Alle Tokens auf einmal ungültig
+machen: `desktop_sessions.json` im Datenordner löschen und den Dienst neu starten.
+
+Der Server muss dafür nicht von außen nach `127.0.0.1` erreichbar sein – den Rücksprung macht der Browser auf dem
+PC selbst. Linux/macOS: `magicbox desktop` (Qt-Fenster) – dort läuft der Login wie im Web im App-Fenster.
 
 ### Fehlersuche
 

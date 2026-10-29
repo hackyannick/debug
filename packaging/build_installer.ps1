@@ -1,22 +1,19 @@
 # Baut den Windows-Installer lokal (PowerShell, im Repo-Ordner):
 #   powershell -ExecutionPolicy Bypass -File packaging\build_installer.ps1
-# Voraussetzungen: Python 3.11+ (python.org), Inno Setup 6 (https://jrsoftware.org/isdl.php)
+# Voraussetzungen: .NET SDK 8 (https://dot.net), Inno Setup 6 (https://jrsoftware.org/isdl.php)
 $ErrorActionPreference = "Stop"
 Set-Location (Split-Path $PSScriptRoot -Parent)
 
-$version = python -c "import tomllib;print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])"
+$version = (Select-String -Path pyproject.toml -Pattern '^version\s*=\s*"([^"]+)"').Matches[0].Groups[1].Value
 Write-Host "==> Magic Box $version"
 
-if (-not (Test-Path .venv-build)) { python -m venv .venv-build }
-$py = ".venv-build\Scripts\python.exe"
-& $py -m pip install --upgrade pip
-& $py -m pip install ".[desktop,malware]" pyinstaller
+Write-Host "==> Native App bauen (WinForms, .NET Framework 4.8)"
+dotnet build desktop\MagicBox\MagicBox.csproj -c Release "-p:Version=$version"
+if ($LASTEXITCODE -ne 0) { throw "Build fehlgeschlagen" }
 
-Write-Host "==> App bündeln (PyInstaller)"
-& $py -m PyInstaller --noconfirm --clean packaging\magicbox.spec
-
-Write-Host "==> Selbsttest des Bundles"
-$st = Start-Process -FilePath "dist\MagicBox\MagicBox.exe" -ArgumentList "--selftest", "dist\selftest.json" -Wait -PassThru
+New-Item -ItemType Directory -Force dist | Out-Null
+Write-Host "==> Selbsttest"
+$st = Start-Process -FilePath "desktop\MagicBox\bin\Release\net48\MagicBox.exe" -ArgumentList "--selftest", "dist\selftest.json" -Wait -PassThru
 Get-Content dist\selftest.json
 if ($st.ExitCode -ne 0) { throw "Selbsttest fehlgeschlagen" }
 

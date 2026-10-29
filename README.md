@@ -19,8 +19,9 @@ die dein Netzwerk verlassen.
 | Teil | Was es ist |
 |---|---|
 | **Server** (`magicbox server`) | Nimmt Proben entgegen, arbeitet sie nacheinander ab, speichert Berichte. Läuft ideal auf dem R640 (Linux) – dort kann eine Windows-Probe nicht versehentlich gestartet werden. |
-| **Web-Oberfläche** | Wird vom Server ausgeliefert. Komplett offline (kein CDN, keine externen Fonts), Hell/Dunkel automatisch. |
-| **Desktop-App** (`magicbox desktop`) | Natives Fenster mit eingebettetem Chromium (Qt WebEngine) um dieselbe Oberfläche. Verbindet sich mit dem R640 – oder startet ohne Konfiguration einen eigenen Server lokal im Hintergrund. |
+| **Web-Oberfläche** | Wird vom Server ausgeliefert. Komplett offline (kein CDN, keine externen Fonts), dunkles Design. |
+| **Windows-App** (`desktop/`) | Echte Win32-Anwendung (WinForms, .NET Framework 4.8 – auf Windows 10/11 schon vorhanden) im Office-2003-Design. Spricht ausschließlich über die REST-API mit dem Server, Live-Ansicht per Server-Sent Events, Anmeldung über den System-Browser (Ory). Installer ≈ 300 KB. |
+| **Desktop-App für Linux/macOS** (`magicbox desktop`) | Fenster mit eingebettetem Chromium (Qt WebEngine) um die Web-Oberfläche; ohne Server-Adresse startet sie einen eigenen Server lokal. |
 | **Drop-Ordner** | Datei in einen (Samba-)Ordner legen → taucht als Auftrag in der Oberfläche auf. |
 | **CLI** | `magicbox analyze probe.exe` für Skripte und Batch-Läufe. |
 
@@ -103,27 +104,28 @@ gesperrten systemd-Dienst ein und zeigt am Ende die URL mit Zugangsschlüssel. O
 rüberkopieren und `install_server.sh --offline` (bzw. `easy-setup.sh server` im entpackten Bundle) nutzen.
 Details: [docs/R640-LLM-Setup.md](docs/R640-LLM-Setup.md).
 
-### Desktop-App
+### Windows-App (nativ, Office-2003-Design)
 
-**Windows-Installer:** `MagicBox-Setup-<Version>.exe` – fragt bei der Installation die Server-Adresse ab
-(vorbelegt `https://magicbox.hackdv.com`), legt Startmenü-/Desktop-Verknüpfung an und braucht keine Adminrechte.
-Die App enthält alles (Python, Qt, Chromium-Engine) – auf dem PC muss nichts vorinstalliert sein.
-Gebaut wird der Installer automatisch per GitHub Actions (Workflow „Desktop-Installer (Windows)“, Download unter
-*Actions → Artefakte*; bei Tags `v*` zusätzlich am Release). Lokal unter Windows:
-`powershell -ExecutionPolicy Bypass -File packaging\build_installer.ps1`.
-Stille Verteilung: `MagicBox-Setup-0.1.0.exe /VERYSILENT /SERVER=https://magicbox.hackdv.com`.
+**Installer:** `MagicBox-Setup-<Version>.exe` – fragt die Server-Adresse ab (vorbelegt `https://magicbox.hackdv.com`),
+legt Startmenü-/Desktop-Verknüpfung an und braucht keine Adminrechte. Gebaut wird er automatisch per GitHub Actions
+(Workflow „Desktop-Installer (Windows)“, Download unter *Actions → Artefakte*; bei Tags `v*` zusätzlich am Release).
+Lokal unter Windows: `powershell -ExecutionPolicy Bypass -File packaging\build_installer.ps1` (braucht .NET SDK 8 und
+Inno Setup 6). Stille Verteilung: `MagicBox-Setup-0.1.0.exe /VERYSILENT /SERVER=https://magicbox.hackdv.com`.
 
-**Ohne Installer:**
+**Aufbau wie Outlook/Word 2003:** links der Navigationsbereich *Aufträge*, in der Mitte der Auftrag (Schritte
+Analyse → KI → Bericht, Fortschritt, Fragefeld, Register *Bericht · KI live · Protokoll*), rechts der
+Aufgabenbereich *Neue Analyse* (Strg+F1). Dateien per Drag & Drop oder Strg+O; Bericht drucken (Strg+P),
+als HTML/Markdown/JSON/IOC-CSV speichern; Server-Einstellungen und Werkzeug-Übersicht unter *Extras*.
 
-**Windows:** Doppelklick auf `scripts\start_windows.bat` · **Linux/macOS:** `./scripts/start_linux.sh`
+**Anmeldung:** Beim ersten Start öffnet die App den Browser. Dort läuft der gewohnte Ory-Login (Captcha, 2FA);
+anschließend bestätigst du auf einer Seite der Magic Box „Desktop-App zulassen“. Der Browser springt zurück
+zu `http://127.0.0.1:<port>/callback`, die App tauscht den Einmal-Code per PKCE gegen ein API-Token
+(`Authorization: Bearer mbd_…`, 30 Tage gültig, `desktop_session_days`). Das Token liegt DPAPI-verschlüsselt in
+`%APPDATA%\MagicBox\desktop.json`; *Datei → Abmelden* widerruft es auf dem Server. Bei Servern mit
+Zugangsschlüssel (`web_token`) fragt die App den Schlüssel direkt ab.
 
-Dann im Menü **Magic Box → Server wechseln …** die Adresse des R640 eintragen (z. B. `http://r640:8765`) oder direkt:
-
-```bash
-magicbox desktop --server http://192.168.1.50:8765
-```
-
-Ohne Server-Adresse startet die App einen eigenen Server lokal (praktisch zum Ausprobieren).
+**Linux/macOS:** `./scripts/start_linux.sh` bzw. `magicbox desktop --server http://192.168.1.50:8765`
+(Qt-WebEngine-Fenster um die Web-Oberfläche; ohne Server-Adresse startet ein lokaler Server).
 
 ### Nur im Browser
 
@@ -194,8 +196,9 @@ magicbox/
 ├── report/      Bericht (HTML/MD/JSON/CSV)
 ├── server/      HTTP-API, Live-Ereignisse, Auftragsverwaltung, Drop-Ordner, Anmeldung (Token/OIDC/Kratos/Oathkeeper)
 ├── web/         Oberfläche (HTML/CSS/JS, ohne Abhängigkeiten)
-├── gui/         Desktop-App (Qt WebEngine)
+├── gui/         Desktop-App für Linux/macOS (Qt WebEngine)
 ├── engine.py · pipeline.py · tools.py · cli.py
-packaging/       Desktop-Installer: PyInstaller-Spezifikation, Inno-Setup-Skript, Symbol
+desktop/         Native Windows-App (C#, WinForms/.NET Framework 4.8, Office-2003-Design, REST-API-Client)
+packaging/       Windows-Installer: Inno-Setup-Skript, Build-Skript, Symbol
 scripts/         easy-setup.sh · install_server.sh · make_offline_bundle.sh · magicbox-server.service · Startskripte
 ```

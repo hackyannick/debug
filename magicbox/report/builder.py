@@ -259,6 +259,19 @@ def build_html(markdown_text: str, title: str) -> str:
     )
 
 
+def build_classic_html(markdown_text: str, title: str) -> str:
+    """Bericht für die native Windows-App (WebBrowser-Steuerelement = IE-Engine) im Office-2003-Stil."""
+    css = (Path(__file__).with_name("classic.css")).read_text(encoding="utf-8")
+    body = markdown_to_html(markdown_text)
+    return (
+        "<!DOCTYPE html>\n<html lang=\"de\"><head><meta charset=\"utf-8\">"
+        "<meta http-equiv=\"X-UA-Compatible\" content=\"IE=edge\">"
+        "<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; style-src 'unsafe-inline'; img-src data:\">"
+        f"<title>{html.escape(title)}</title><style>{css}</style></head>"
+        f"<body><div class=\"doc\">{body}</div></body></html>"
+    )
+
+
 def build_qt_html(markdown_text: str) -> str:
     """Vereinfachtes HTML für die Vorschau in Qt (QTextBrowser kann nur einfaches CSS)."""
     body = markdown_to_html(markdown_text)

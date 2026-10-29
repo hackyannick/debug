@@ -1,0 +1,23 @@
+/* Bericht für die Windows-App (eingebettete IE-Engine): Office-2003-Optik, bewusst ohne CSS-Variablen */
+body { margin: 0; background: #ffffff; color: #000000; font: 10pt/1.5 Tahoma, Verdana, "Segoe UI", sans-serif; }
+.doc { padding: 14px 22px 30px; }
+h1 { font-size: 17pt; font-weight: bold; color: #15428b; margin: 0 0 4px; padding-bottom: 6px;
+  border-bottom: 3px solid #6593cf; }
+h2 { font-size: 12pt; font-weight: bold; color: #15428b; margin: 22px 0 8px; padding: 4px 8px;
+  border: 1px solid #99bbe8; background: #dde8f7;
+  background: linear-gradient(to bottom, #e3efff 0%, #c4dbf9 100%); }
+h3 { font-size: 10.5pt; font-weight: bold; color: #15428b; margin: 16px 0 6px; border-bottom: 1px solid #c4dbf9; }
+h4, h5, h6 { font-size: 10pt; font-weight: bold; color: #3a5a8c; margin: 12px 0 4px; }
+p, li { max-width: 80em; }
+a { color: #0033cc; }
+hr { border: 0; border-top: 1px solid #a5bfe1; margin: 18px 0; }
+em { color: #555555; }
+blockquote { margin: 10px 0; padding: 6px 10px; background: #ffffe1; border: 1px solid #c9b77a; border-left: 4px solid #e8a33d; }
+table { border-collapse: collapse; margin: 6px 0 12px; font-size: 9pt; }
+th, td { text-align: left; padding: 3px 7px; border: 1px solid #a5bfe1; vertical-align: top; }
+th { background: #d6e3f7; color: #15428b; font-weight: bold; }
+tr:nth-child(even) td { background: #f3f7fd; }
+code { font-family: Consolas, "Courier New", monospace; font-size: 9pt; background: #f1f5fb; padding: 0 3px; }
+pre { font-family: Consolas, "Courier New", monospace; font-size: 9pt; background: #f7f9fd; border: 1px solid #a5bfe1;
+  padding: 8px; overflow: auto; max-height: 420px; }
+pre code { background: none; padding: 0; }

@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Native Windows-App (WinForms auf .NET Framework 4.8 – auf Windows 10/11 vorinstalliert, keine Laufzeit nötig) -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <AssemblyName>MagicBox</AssemblyName>
+    <RootNamespace>MagicBox.Desktop</RootNamespace>
+    <ApplicationIcon>..\..\magicbox\assets\magicbox.ico</ApplicationIcon>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <Version>0.1.0</Version>
+    <Product>Magic Box</Product>
+    <Company>Magic Box</Company>
+    <Description>Magic Box – Dateien statisch analysieren und dokumentieren</Description>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="System.Windows.Forms" />
+    <Reference Include="System.Drawing" />
+    <Reference Include="System.Net.Http" />
+    <Reference Include="System.Security" />
+  </ItemGroup>
+</Project>

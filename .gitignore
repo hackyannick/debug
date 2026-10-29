@@ -10,3 +10,5 @@ magicbox-offline.tar.gz
 magicbox-offline/
 reports/
 venv/
+desktop/**/bin/
+desktop/**/obj/

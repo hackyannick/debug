@@ -111,6 +111,7 @@ class Settings:
     oidc_token_auth: str = "client_secret_basic"  # oder "client_secret_post"
     oidc_post_logout_uri: str = ""  # nur setzen, wenn beim Client als post_logout_redirect_uri registriert
     oidc_session_hours: int = 12
+    desktop_session_days: int = 30  # Gültigkeit der Anmeldung der nativen Desktop-App
     auth_require_aal2: bool = False  # nur Sitzungen mit zweitem Faktor (Kratos AAL2) zulassen
     max_upload_mb: int = 2048
 

@@ -191,6 +191,9 @@ class Authenticator:
         self._cache: dict[str, tuple[float, Identity | None, str]] = {}
         self._lock = threading.Lock()
         self.oathkeeper_jwks = JWKSVerifier(lambda: self.s.oathkeeper_jwks_url)
+        from .desktop import DesktopAuth
+
+        self.desktop = DesktopAuth(data_dir, settings.desktop_session_days)
         self.oidc = None
         if settings.auth_mode == "oidc":
             from .oidc import OIDCClient
@@ -200,6 +203,13 @@ class Authenticator:
     @property
     def mode(self) -> str:
         return self.s.auth_mode if self.s.auth_mode in ("kratos", "oathkeeper", "oidc") else "token"
+
+    @property
+    def desktop_login(self) -> str:
+        """Wie sich die Desktop-App anmeldet: "browser" (Ory über den System-Browser), "token" oder "none"."""
+        if self.mode == "token":
+            return "token" if self.token else "none"
+        return "browser"
 
     @property
     def protects(self) -> bool:
@@ -215,6 +225,12 @@ class Authenticator:
         for candidate in (bearer, cookie_token):
             if self.token and candidate and hmac.compare_digest(candidate.encode(), self.token.encode()):
                 return Identity("token", "Zugangsschlüssel", "token")
+        if bearer.startswith("mbd_"):  # Token der Desktop-App (siehe desktop.py)
+            ident = self.desktop.identity(bearer)
+            if ident is None:
+                raise AuthFailed("Anmeldung der Desktop-App abgelaufen oder widerrufen – bitte neu anmelden.")
+            self.check_access(ident)
+            return ident
 
         if self.mode == "token":
             if not self.token:
@@ -247,7 +263,8 @@ class Authenticator:
 
     def login_url(self, return_to: str, aal2: bool = False) -> str:
         if self.mode == "oidc":
-            path = urllib.parse.urlsplit(return_to).path or "/"
+            parts = urllib.parse.urlsplit(return_to)
+            path = (parts.path or "/") + (f"?{parts.query}" if parts.query else "")
             return "/auth/login?" + urllib.parse.urlencode({"next": path})
         if self.s.auth_login_url:
             sep = "&" if "?" in self.s.auth_login_url else "?"
