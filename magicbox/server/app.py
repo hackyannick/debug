@@ -29,7 +29,7 @@ WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 # Über die Web-Oberfläche änderbare Einstellungen (Netzwerk/Zugang bewusst nicht)
 EDITABLE = {
     "use_llm", "provider", "base_url", "model", "api_key", "context_tokens", "max_answer_tokens", "temperature",
-    "timeout_s", "language", "audience", "max_llm_children", "max_code_chunks", "profile", "max_archive_depth",
+    "timeout_s", "language", "audience", "max_llm_children", "max_code_chunks", "code_chunk_chars", "child_facts_chars", "profile", "max_archive_depth",
     "max_archive_members", "max_disasm_functions", "use_radare2", "radare2_path", "archive_passwords", "upx_path",
     "sevenzip_path", "use_capa", "capa_path", "capa_rules", "capa_timeout_s", "yara_rules_dir", "ilspy_path",
     "tool_timeout_s",

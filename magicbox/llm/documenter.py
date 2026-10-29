@@ -202,7 +202,8 @@ class Documenter:
                     take = min(per_big, chunk_budget)
                     code_notes, used = self._chunk_notes(item, budget, take)
                     chunk_budget -= used
-                facts = facts_text(item, int(budget * (0.5 if code_notes else 0.8)), include_code=not code_notes)
+                limit = min(int(budget * 0.8), self.s.child_facts_chars)
+                facts = facts_text(item, limit // 2 if code_notes else limit, include_code=not code_notes)
                 if code_notes:
                     facts += "\n\n### Zusammenfassungen der aufschlussreichsten Code-Teile\n" + code_notes
                 summary = self._ask(prompts.child_notes_prompt(item.name, facts, self.s.profile == "malware"),
@@ -228,7 +229,8 @@ class Documenter:
         """Code in Teile zerlegen; passen nicht alle, die aufschlussreichsten wählen (Endpunkte, IPC, Aktionen …)."""
         code = code_material(result)
         context = facts_text(result, 1500, include_code=False)
-        chunks = split_chunks(code, max(2000, int(budget * 0.75) - len(context)))
+        size = min(int(budget * 0.75) - len(context), self.s.code_chunk_chars)
+        chunks = split_chunks(code, max(2000, size))
         picked = list(range(len(chunks)))
         if len(chunks) > limit:
             ranked = sorted(picked, key=lambda i: (-interest(chunks[i]), i))[:limit]

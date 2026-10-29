@@ -1019,10 +1019,15 @@ namespace MagicBox.Desktop
                 return;
             }
             var since = (int)Math.Min(idle, (DateTime.Now - (llmSince == DateTime.MinValue ? DateTime.Now : llmSince)).TotalSeconds);
+            // Hat das Modell in diesem Auftrag schon geschrieben, ist es geladen – dann ist es das Einlesen der Eingabe
+            bool loaded = ai.ToString().Split('\n').Any(l => l.Trim().Length > 0 && !l.Contains("────"));
             aiWait.Text = since < 20
-                ? "⏳  Das Sprachmodell liest die Analyse-Fakten ein …"
-                : $"⏳  Warte auf das Sprachmodell (seit {since} s) – beim ersten Aufruf lädt Ollama das Modell in den Speicher; " +
-                  "bei großen Modellen dauert das auf CPU 1–3 Minuten.";
+                ? "⏳  Das Sprachmodell liest die Eingabe ein …"
+                : loaded
+                    ? $"⏳  Das Sprachmodell liest den nächsten Abschnitt ein (seit {since} s) – auf der CPU dauert das Einlesen " +
+                      "langer Eingaben mehrere Minuten, die Antwort kommt danach zügig."
+                    : $"⏳  Warte auf das Sprachmodell (seit {since} s) – beim ersten Aufruf lädt Ollama das Modell in den Speicher; " +
+                      "dazu kommt das Einlesen der Eingabe, auf der CPU zusammen oft mehrere Minuten.";
             aiWait.Visible = true;
         }
 

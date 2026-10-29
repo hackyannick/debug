@@ -59,6 +59,10 @@ class Settings:
     audience: str = "verständlich für technisch interessierte Laien"
     max_llm_children: int = 12  # max. Einzel-Zusammenfassungen bei Archiven/Ordnern
     max_code_chunks: int = 6  # max. Code-Teilstücke, die einzeln vom LLM gelesen werden
+    # Größe eines Code-Teils bzw. der Fakten einer Teil-Analyse (Zeichen). Auf der CPU bestimmt vor allem die
+    # Länge der Eingabe die Wartezeit; minifizierter Code braucht ~2,5 Zeichen pro Token.
+    code_chunk_chars: int = 12000
+    child_facts_chars: int = 16000
 
     # Berichtsprofil: "malware" (IOCs, ATT&CK, Erkennung) oder "allgemein" (Software-Doku)
     profile: str = "malware"

@@ -319,10 +319,15 @@ function updateAiWait() {
   const idle = (Date.now() - (state.lastTokenAt || 0)) / 1000;
   if (!llmPhase || idle < 4) { box.classList.add("hidden"); return; }
   const since = Math.round(Math.min(idle, (Date.now() - (state.llmSince || Date.now())) / 1000));
+  // Hat das Modell in diesem Auftrag schon geschrieben, ist es geladen – dann ist es das Einlesen der Eingabe
+  const loaded = state.ai.split("\n").some((l) => l.trim() && !l.includes("────"));
   $("#ai-wait-text").textContent = since < 20
-    ? "Das Sprachmodell liest die Analyse-Fakten ein …"
-    : `Warte auf das Sprachmodell (seit ${since} s) – beim ersten Aufruf lädt Ollama das Modell in den Speicher, ` +
-      "bei großen Modellen und langen Eingaben dauert das auf CPU 1–3 Minuten.";
+    ? "Das Sprachmodell liest die Eingabe ein …"
+    : loaded
+      ? `Das Sprachmodell liest den nächsten Abschnitt ein (seit ${since} s) – auf der CPU dauert das Einlesen ` +
+        "langer Eingaben mehrere Minuten, die Antwort kommt danach zügig."
+      : `Warte auf das Sprachmodell (seit ${since} s) – beim ersten Aufruf lädt Ollama das Modell in den Speicher; ` +
+        "dazu kommt das Einlesen der Eingabe, auf der CPU zusammen oft mehrere Minuten.";
   box.classList.remove("hidden");
 }
 setInterval(updateAiWait, 1000);
