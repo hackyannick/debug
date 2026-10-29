@@ -63,7 +63,7 @@ def test_unpacked_electron_app_with_own_packages(settings):
     assert "Verwendete Techniken" in titles and "Auffällige Muster" not in titles  # Software-Profil
     assert "Quelltext (zur Lesbarkeit umbrochen)" in titles
     landkarte = next(s for s in main.sections if s.title.startswith("Bundle-Auswertung")).text
-    for expected in ("player:play (handle)", "download:start (on)", "qobuzapp", "volume", "QOBUZ_ENV",
+    for expected in ("player:play", "download:start", "qobuzapp", "volume", "QOBUZ_ENV",
                      "PLAYER/PLAY_TRACK", "Unable to play this track right now"):
         assert expected in landkarte, expected
     hosts = next(s for s in main.sections if s.title.startswith("Angesprochene Server"))
@@ -75,8 +75,8 @@ def test_unpacked_electron_app_with_own_packages(settings):
 
 def test_extract_and_interest():
     facts = extract(MAIN.decode())
-    assert "Fenster (BrowserWindow)" in [a[0] for a in facts["apis"]]
-    assert "Infobereich-Symbol (Tray)" in [a[0] for a in facts["apis"]]
+    assert "Fenster (BrowserWindow)" in facts["apis"] and "Infobereich-Symbol (Tray)" in facts["apis"]
+    assert facts["ipc"] == {"player:play": "handle", "download:start": "on"}
     assert interest('ipcMain.handle("x",f);fetch("https://a.example.org/b")') > interest("var a=1;" * 50)
 
 
@@ -100,3 +100,37 @@ def test_small_files_grouped_and_bundles_chunked(fake_llm, settings):
 def test_report_lists_named_functions_only():
     from magicbox.analyzers.radare2 import UNNAMED
     assert "fcn.180038b90".startswith(UNNAMED) and not "method.juce::AudioSourcePlayer.virtual_8".startswith(UNNAMED)
+
+
+def test_app_wide_map_reaches_the_overall_doc(fake_llm, settings):
+    r = Engine(replace(settings, profile="allgemein")).analyze_bytes("qobuz-app.zip", app_zip())
+    overall = next(s for s in r.sections if s.title == "Funktionslandkarte der gesamten App")
+    assert "player:play" in overall.text and "LIBRARY/ADD_ALBUM" in overall.text  # aus beiden Bundles
+    hosts = next(s for s in r.sections if s.title.startswith("Angesprochene Server") and "gesamte App" in s.title)
+    assert [row[1] for row in hosts.table.rows[:2]] == ["eigener Dienst", "eigener Dienst"]  # qobuz.com zuerst
+    s = replace(settings, use_llm=True, base_url=fake_llm.url, profile="allgemein", max_code_chunks=0,
+                max_llm_children=1)
+    Documenter(s).document(r)
+    final = fake_llm.requests[-1]["messages"][1]["content"]
+    assert "Funktionslandkarte der gesamten App" in final and "player:play" in final
+
+
+def test_map_filters_library_noise():
+    text = ('fetch("https://momentjs.com/guides/#/warnings/");open("https://www.facebook.com/sharer.php");'
+            'fetch("https://www.qobuz.com/api.json/0.2/track/get");x="node:process";y="xlink:href";'
+            'z="PLAYER/PLAY_TRACK";a="Sentry SDK should be initialized before the Electron app is ready";'
+            'b="Your offline library is full";c="Tem certeza de que deseja sair?";d="YYYY/MM/DD"') * 30
+    facts = extract(text, {"qobuz"})
+    assert set(facts["hosts"]) == {"www.qobuz.com", "www.facebook.com"}
+    assert facts["hosts"]["www.qobuz.com"]["kind"] == "eigener Dienst"
+    assert facts["actions"] == ["PLAYER/PLAY_TRACK"]
+    assert facts["texts"][0] == "Your offline library is full" and not any("Tem certeza" in t for t in facts["texts"])
+
+
+def test_channel_grouping_and_sql_detection():
+    from magicbox.analyzers.identify import detect
+    from magicbox.analyzers.jsbundle import group_channels
+    lines = group_channels(["player-play-music", "player-pause-music", "chromecast-scan", "notify-error"])
+    assert lines == ["player (2): pause-music, play-music", "weitere (2): chromecast-scan, notify-error"]
+    assert detect(b"BEGIN TRANSACTION;\nCREATE TABLE x (id INT);\nCOMMIT;\n", "qobuz.sqlite") == \
+        ("source", "Quelltext/Skript (sql)")

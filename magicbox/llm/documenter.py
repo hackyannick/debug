@@ -188,8 +188,19 @@ class Documenter:
             def rank(c: AnalysisResult) -> tuple:
                 serious = len([f for f in c.findings if f.severity in ("high", "medium")])
                 code_first = c.kind == "source" if software else c.kind != "source"
-                return (-serious, is_shell(c), c.kind != "asar", not code_first, -c.size)
+                data_like = bool(DATA_LANG_RE.search(c.description))  # JSON/SQL/Text nach echtem Code
+                return (-serious, is_shell(c), c.kind != "asar", not code_first, data_like, -c.size)
             interesting.sort(key=rank)
+            # identische Dateien (gleicher Hash) nur einmal von der KI lesen lassen
+            seen: set[str] = set()
+            unique = []
+            for c in interesting:
+                digest = c.hashes.get("sha256", "")
+                if digest and digest in seen:
+                    continue
+                seen.add(digest)
+                unique.append(c)
+            interesting = unique
             selected = group_small(interesting)[: self.s.max_llm_children]
             # Große Code-Dateien (Bundles): zusätzlich die aufschlussreichsten Teile einzeln lesen lassen
             big = [item for item, _ in selected if len(code_material(item)) > budget]
@@ -297,6 +308,7 @@ def verification_note(result: AnalysisResult, text: str) -> str:
 
 
 GROUP_MAX_SIZE = 8 * 1024
+DATA_LANG_RE = re.compile(r"\((?:json|sql|text|css|xml|yaml|toml|ini|csv|markdown)\)")
 
 
 def group_small(children: list[AnalysisResult]) -> list[tuple[AnalysisResult, list[AnalysisResult]]]:

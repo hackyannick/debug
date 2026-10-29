@@ -67,6 +67,7 @@ class AsarAnalyzer(Analyzer):
         entry = dict(entries).get("package.json")
         pkg = package_info(read(ctx.data, base, entry) if entry else None, result)
         mine = first_party(pkg)
+        ctx.shared.setdefault("first_party_tokens", set()).update(app_tokens(pkg))
         own = [(p, e) for p, e in entries if is_own(p, mine)]
         modules = [(p, e) for p, e in entries if "node_modules/" in f"/{p}"]
         main = posixpath.normpath(pkg.get("main", "index.js")) if pkg else "index.js"
@@ -138,8 +139,8 @@ GENERIC_WORDS = {"app", "apps", "desktop", "electron", "client", "player", "musi
                  "software", "studio", "team", "labs", "tech", "node", "core", "main", "web"}
 
 
-def first_party(pkg: dict) -> set[str]:
-    """Eigene Pakete der App, z. B. @qobuz/qobuz-dwp-ui bei der App „Qobuz“ (gleicher Name/Scope)."""
+def app_tokens(pkg: dict) -> set[str]:
+    """Namensbestandteile der App/des Herstellers, z. B. {"qobuz"} – erkennt eigene Pakete und eigene Server."""
     if not pkg:
         return set()
     author = pkg.get("author")
@@ -147,7 +148,14 @@ def first_party(pkg: dict) -> set[str]:
     names = [str(v).lower() for v in (pkg.get("name"), pkg.get("productName"), author) if v]
     tokens = {re.sub(r"[^a-z0-9]", "", n) for n in names}
     tokens |= {w for n in names for w in re.split(r"[^a-z0-9]+", n) if len(w) >= 4 and w not in GENERIC_WORDS}
-    tokens = {t for t in tokens if len(t) >= 3}
+    return {t for t in tokens if len(t) >= 3 and t not in GENERIC_WORDS}
+
+
+def first_party(pkg: dict) -> set[str]:
+    """Eigene Pakete der App, z. B. @qobuz/qobuz-dwp-ui bei der App „Qobuz“ (gleicher Name/Scope)."""
+    tokens = app_tokens(pkg)
+    if not tokens:
+        return set()
     deps = {**(pkg.get("dependencies") or {}), **(pkg.get("optionalDependencies") or {})}
     own = set()
     for dep in deps:

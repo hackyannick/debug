@@ -18,7 +18,8 @@ import zlib
 from magicbox import tools
 from magicbox.model import AnalysisResult, Section, Table
 
-from .asar import first_party, is_electron, is_own, modules_table, node_app_root, package_info, rank, wanted
+from .asar import (SKIP_EXT, app_tokens, first_party, is_electron, is_own, modules_table, node_app_root, package_info,
+                   rank, wanted)
 from .base import Analyzer, Context, human_size
 from .strings import extract_strings
 
@@ -157,12 +158,20 @@ class ArchiveAnalyzer(Analyzer):
             result.description = ctype
         app_root = node_app_root([m[0] for m in members])
         listed, note = members, ""
-        if app_root is not None:  # App-Ordner: Fremdpakete nur zählen, nicht einzeln auflisten
-            mine = first_party(_load_json(next((d for n, _, d in members if n == app_root + "package.json"), None)))
-            listed = [m for m in members if is_own(m[0], mine)]
-            if len(listed) < len(members):
-                note = (f"Ohne {len(members) - len(listed)} Dateien fremder npm-Pakete (node_modules) – "
-                        "Name und Version siehe „Verwendete npm-Pakete“.")
+        if app_root is not None:  # App-Ordner: Fremdpakete nur zählen, Medien/Schriften zusammenfassen
+            pkg = _load_json(next((d for n, _, d in members if n == app_root + "package.json"), None))
+            mine = first_party(pkg)
+            ctx.shared.setdefault("first_party_tokens", set()).update(app_tokens(pkg))
+            own = [m for m in members if is_own(m[0], mine)]
+            listed = [m for m in own if not m[0].lower().endswith(SKIP_EXT)]
+            media = len(own) - len(listed)
+            parts = []
+            if len(own) < len(members):
+                parts.append(f"{len(members) - len(own)} Dateien fremder npm-Pakete (node_modules) – Name und Version "
+                             "siehe „Verwendete npm-Pakete“")
+            if media:
+                parts.append(f"{media} Bilder, Schriften und Medien")
+            note = ("Nicht aufgeführt: " + "; ".join(parts) + ".") if parts else ""
         rows = [[n, human_size(sz)] for n, sz, _ in listed[:500]]
         result.add(Section(f"Inhalt ({len(listed)} Einträge)", text=note,
                            table=Table(["Pfad", "Größe"], rows, total=len(listed)), llm_priority=1))

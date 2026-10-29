@@ -104,7 +104,8 @@ class Radare2Analyzer(Analyzer):
                                table=Table(["Name", "Adresse", "Größe (Bytes)", "Blöcke"], rows, total=len(named))
                                if rows else None, text=" ".join(notes), llm_priority=2))
 
-            targets = self._pick(own, ctx.settings.max_disasm_functions)
+            library_file = ctx.path.name.lower().endswith((".dll", ".node", ".so", ".dylib", ".sys"))
+            targets = self._pick(own, ctx.settings.max_disasm_functions, skip_entry=library_file)
             cmds = [level] + [f"?e {SEP}{f['name']}@{f['addr']:#x};pdc @ {f['addr']}" for f in targets]
             try:
                 out = _run(r2, tmp, ";".join(cmds), timeout)
@@ -126,10 +127,14 @@ class Radare2Analyzer(Analyzer):
                 pass
 
     @staticmethod
-    def _pick(funcs: list[dict], limit: int) -> list[dict]:
+    def _pick(funcs: list[dict], limit: int, skip_entry: bool = False) -> list[dict]:
+        """Einstiegspunkte zuerst – außer bei Bibliotheken (DLL/.node): dort sind main/entry0 nur Startcode der
+        C-Laufzeit; aussagekräftiger sind die benannten Methoden."""
         by_name = {f["name"]: f for f in funcs}
-        picked = [by_name[n] for n in ("main", "sym.main", "entry0", "sym.WinMain", "sym._main", "sym.DllMain")
-                  if n in by_name]
+        starts = () if skip_entry else ("main", "sym.main", "entry0", "sym.WinMain", "sym._main", "sym.DllMain")
+        picked = [by_name[n] for n in starts if n in by_name]
+        if skip_entry:
+            funcs = [f for f in funcs if f["name"] not in ("main", "entry0") and f.get("realsz", 0) >= 32]
         # benannte Funktionen zuerst (aussagekräftiger), dann nach Größe
         rest = sorted((f for f in funcs if f not in picked),
                       key=lambda f: (f.get("name", "").startswith(UNNAMED), -f.get("realsz", 0)))

@@ -2,7 +2,8 @@
 
 Minifizierter Code verliert Variablennamen, behält aber alles, was nach außen sichtbar ist: Zeichenketten,
 API-Namen, Endpunkte, IPC-Kanäle, Aktionsnamen. Daraus ergibt sich eine „Landkarte“ der Funktionen – kompakt
-genug für den KI-Kontext, auch wenn das Bundle selbst Megabytes groß ist.
+genug für den KI-Kontext, auch wenn das Bundle selbst Megabytes groß ist. ``aggregate`` fasst die Landkarten
+aller Dateien einer App zusammen, damit auch die Gesamt-Doku sie sieht.
 """
 
 from __future__ import annotations
@@ -61,39 +62,92 @@ ELECTRON_APIS = [
     (r"\bi18n\b|\btranslate\(|\blocale\b", "Mehrsprachigkeit"),
 ]
 _API_RES = [(re.compile(p), label) for p, label in ELECTRON_APIS]
-NOISE_HOSTS = ("www.w3.org", "w3.org", "schemas.", "purl.org", "json-schema.org", "reactjs.org", "fb.me",
-               "github.com", "mozilla.org", "developer.mozilla.org", "tools.ietf.org", "example.com", "localhost")
+
+# Links aus Fehlermeldungen/Doku eingebauter Bibliotheken – sagen nichts über die App
+DOC_HOSTS = {
+    "momentjs.com", "docs.sentry.io", "sentry.io", "sequelize.org", "storybook.js.org", "react-dnd.github.io",
+    "testing-library.com", "redux.js.org", "formatjs.io", "npms.io", "reactjs.org", "react.dev", "fb.me", "nodejs.org",
+    "github.com", "stuk.github.io", "www.sqlite.org", "www.prisma.io", "docs.oracle.com", "www.oracle.com",
+    "evilmartians.com", "w3ctech.com", "www.w3ctech.com", "dogs.are.great", "f.a.k", "my-image.com", "bit.ly",
+    "goo.gl", "mui.com", "lodash.com", "babeljs.io", "webpack.js.org", "electronjs.org", "www.electronjs.org",
+    "developer.mozilla.org", "mozilla.org", "www.w3.org", "w3.org", "purl.org", "json-schema.org", "tools.ietf.org",
+    "example.com", "example.org", "localhost", "ns.adobe.com", "schemas.microsoft.com", "www.npmjs.com",
+    "stackoverflow.com", "en.wikipedia.org", "opentelemetry.io", "nextjs.org", "vuejs.org", "angular.io",
+}
+SOCIAL_HOSTS = {
+    "facebook.com", "www.facebook.com", "graph.facebook.com", "twitter.com", "x.com", "linkedin.com",
+    "www.linkedin.com", "vk.com", "connect.ok.ru", "connect.mail.ru", "www.reddit.com", "reddit.com",
+    "www.instapaper.com", "www.youtube.com", "www.youtube-nocookie.com", "pinterest.com", "www.pinterest.com",
+    "t.me", "wa.me", "api.whatsapp.com",
+}
+HOST_RE = re.compile(r"^[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}$")
+# Namen von Node-Modulen, Pfaden und Formaten, die wie Aktionsnamen aussehen
+NOISE_ACTION_HEADS = {
+    "node", "xml", "xlink", "xmlns", "svg", "chai", "storybook", "sql", "connection", "lib", "test", "path", "posix",
+    "win32", "stream", "streams", "timers", "util", "dns", "fs", "readline", "inspector", "assert", "domain", "http2",
+    "worker", "perf", "diagnostics", "string", "sys", "tty", "wasi", "repl", "sea", "sqlite", "punycode",
+    "querystring", "url", "v8", "vm", "zlib", "os", "net", "tls", "crypto", "events", "buffer", "child", "cluster",
+    "console", "constants", "dgram", "module", "process", "async", "http", "https", "text", "application", "image",
+    "audio", "video", "font", "multipart", "data", "blob", "mailto", "tel", "about", "chrome", "file", "javascript",
+    "webpack", "src", "dist", "assets", "static", "legacy", "react", "redux", "moment", "sentry", "babel", "core",
+}
+DE_WORDS = {"der", "die", "das", "und", "nicht", "sie", "ihre", "ihr", "ist", "wird", "werden", "bitte", "mit", "für",
+            "auf", "eine", "einen", "keine", "kann", "können", "wurde", "wurden", "zu", "von", "oder", "jetzt"}
+EN_WORDS = {"the", "you", "your", "is", "are", "to", "please", "with", "for", "this", "not", "can", "cannot", "and",
+            "will", "has", "have", "been", "was", "now", "there", "an", "of", "in", "on"}
+OTHER_WORDS = {"você", "não", "está", "usted", "puedes", "para", "las", "los", "una", "della", "che", "il", "vous",
+               "votre", "les", "des", "pour", "est", "pas", "sono", "seu", "sua", "também", "aquí", "nos", "vos"}
+LIBRARY_MARKERS = re.compile(r"sentry|sequelize|moment|jszip|socks|\bspan\b|transaction|\bdsn\b|deprecated|spotlight|"
+                             r"tracing|promise|callback|undefined|instance|webpack|polyfill|eslint|\breact\b|redux|"
+                             r"\bprop\b|argument|stack ?trace|\bmodule\b|options object|isolation scope", re.I)
+
+
+def _language_ok(text: str) -> bool:
+    """Oberflächentexte nur auf Deutsch/Englisch zeigen – dieselbe Meldung in 6 Sprachen bringt nichts."""
+    words = set(re.findall(r"[a-zäöüßéèêàçãõñ]+", text.lower()))
+    return bool(words & (DE_WORDS | EN_WORDS)) and not words & OTHER_WORDS
 
 
 def _top(counter: Counter, n: int) -> list[str]:
     return [k for k, _ in counter.most_common(n)]
 
 
-def extract(text: str) -> dict[str, list]:
-    facts: dict[str, list] = {}
+def _host_kind(host: str, own: set[str]) -> str:
+    if any(t in host.replace("-", "").replace(".", "") for t in own):
+        return "eigener Dienst"
+    if host in SOCIAL_HOSTS:
+        return "Teilen/Einbettung (soziale Netzwerke)"
+    return "Fremddienst/CDN"
+
+
+def extract(text: str, own: set[str] = frozenset()) -> dict:
+    """Strukturierte Landkarte eines Bundles. ``own``: Namensbestandteile der App (z. B. {"qobuz"})."""
+    facts: dict = {}
     hosts: Counter = Counter()
     examples: dict[str, str] = {}
     for m in URL_RE.finditer(text):
-        url = m.group().rstrip(".,;:'\"")
-        host = urlsplit(url).netloc.lower()
-        if not host or any(host.endswith(n) or host.startswith(n) for n in NOISE_HOSTS):
+        url = m.group().rstrip(".,;:'\"$({")
+        host = urlsplit(url).netloc.lower().split(":")[0]
+        if not HOST_RE.match(host) or host in DOC_HOSTS or any(host.endswith("." + d) for d in DOC_HOSTS):
             continue
         hosts[host] += 1
         if host not in examples or (len(url) > len(examples[host]) and len(url) < 140):
             examples[host] = url
     if hosts:
-        facts["hosts"] = [[h, str(c), clip(examples[h], 120)] for h, c in hosts.most_common(30)]
+        facts["hosts"] = {h: {"count": c, "example": examples[h], "kind": _host_kind(h, own)}
+                          for h, c in hosts.most_common(40)}
     paths = Counter(m.group(1) for m in API_PATH_RE.finditer(text)
-                    if not m.group(1).startswith(("/static/", "/assets/", "/node_modules/")))
+                    if not m.group(1).startswith(("/static/", "/assets/", "/node_modules/", "/legacy/", "/usr/", "/var/",
+                                                  "/etc/", "/proc/", "/sys/", "/dev/")))
     if paths:
-        facts["api_paths"] = _top(paths, 40)
-    ipc: Counter = Counter()
+        facts["api_paths"] = _top(paths, 60)
+    ipc: dict[str, str] = {}
     for m in IPC_RE.finditer(text):
-        ipc[f"{m.group(2)} ({m.group(1)})"] += 1
+        ipc.setdefault(m.group(2), m.group(1))
     for m in WEBCONTENTS_SEND_RE.finditer(text):
-        ipc[f"{m.group(1)} (webContents.send)"] += 1
+        ipc.setdefault(m.group(1), "webContents.send")
     if ipc:
-        facts["ipc"] = _top(ipc, 60)
+        facts["ipc"] = ipc
     for key, rx in (("bridge", BRIDGE_RE), ("protocols", PROTOCOL_RE), ("switches", SWITCH_RE), ("storage", STORAGE_RE)):
         found = Counter(m.group(1) for m in rx.finditer(text))
         if found:
@@ -101,18 +155,29 @@ def extract(text: str) -> dict[str, list]:
     env = Counter(m.group(1) or m.group(2) for m in ENV_RE.finditer(text))
     if env:
         facts["env"] = _top(env, 40)
-    actions = Counter(m.group(1) for m in ACTION_RE.finditer(text)
-                      if not m.group(1).startswith(("http", "text/", "application/", "image/", "audio/", "video/")))
+    actions = Counter()
+    for m in ACTION_RE.finditer(text):
+        name = m.group(1)
+        head = re.split(r"[/:]", name, maxsplit=1)[0].lower()
+        if head not in NOISE_ACTION_HEADS and not re.fullmatch(r"[YMDHhms/:.-]+", name):
+            actions[name] += 1
     if actions:
-        facts["actions"] = _top(actions, 80)
-    apis = [[label, str(len(rx.findall(text)))] for rx, label in _API_RES if rx.search(text)]
+        facts["actions"] = _top(actions, 100)
+    apis = {label: len(rx.findall(text)) for rx, label in _API_RES if rx.search(text)}
     if apis:
         facts["apis"] = apis
-    texts = {t for m in QUOTED_RE.finditer(text) for t in [m.group(1) or m.group(2)]
+    texts = {t.strip() for m in QUOTED_RE.finditer(text) for t in [m.group(1) or m.group(2)]
              if " " in t and not t.startswith(("http", "/", ".", "#")) and "{" not in t and "=" not in t}
-    natural = [t for t in sorted(texts, key=_readability) if not _readability(t)[0]]
+
+    def ui_rank(t: str) -> tuple:
+        low = t.lower()
+        addressed = bool(re.search(r"\b(you|your|sie|ihre?n?|du|dein)\b", low))
+        product = any(o in low.replace(" ", "") for o in own)
+        return (bool(LIBRARY_MARKERS.search(t)), not (addressed or product), _readability(t))
+
+    natural = [t for t in texts if not _readability(t)[0] and _language_ok(t)]
     if natural:
-        facts["texts"] = natural[:60]
+        facts["texts"] = sorted(natural, key=ui_rank)[:50]
     return facts
 
 
@@ -122,6 +187,98 @@ def interest(text: str) -> int:
     score = 3 * len(IPC_RE.findall(text)) + 2 * len(URL_RE.findall(text)) + len(ACTION_RE.findall(text))
     score += sum(1 for rx, _ in _API_RES if rx.search(text))
     return score
+
+
+def group_channels(channels: list[str]) -> list[str]:
+    """IPC-Kanäle nach Präfix gruppieren: „player (12): play-music, pause-music, …“."""
+    groups: dict[str, list[tuple[str, str]]] = {}
+    for ch in sorted(set(channels), key=str.lower):
+        parts = re.split(r"[-:_]", ch, maxsplit=1)
+        head = parts[0].lower() if len(parts) > 1 and parts[0] else ""
+        groups.setdefault(head, []).append((parts[1] if head else ch, ch))
+    single = [v[0][1] for h, v in groups.items() if h and len(v) == 1]
+    lines = [f"{h} ({len(v)}): {', '.join(rest for rest, _ in v)}" for h, v in groups.items() if h and len(v) > 1]
+    rest = [orig for _, orig in groups.get("", [])] + single
+    if rest:
+        lines.append(f"weitere ({len(rest)}): {', '.join(sorted(rest, key=str.lower))}")
+    return lines
+
+
+def render(facts: dict, title: str) -> list[Section]:
+    """Abschnitte für Bericht und KI-Kontext aus einer (ggf. zusammengefassten) Landkarte."""
+    lines = []
+    if facts.get("ipc"):
+        lines.append(f"**IPC-Kanäle Oberfläche ↔ Hauptprozess ({len(facts['ipc'])}), nach Bereich:**\n"
+                     + "\n".join(f"- {line}" for line in group_channels(list(facts["ipc"]))))
+    labels = {
+        "api_paths": "App-Routen/API-Pfade", "bridge": "Für die Oberfläche freigegebene Schnittstellen (contextBridge)",
+        "protocols": "Eigene URL-Protokolle", "switches": "Chromium-Schalter", "storage": "Gespeicherte Einstellungen (localStorage)",
+        "env": "Umgebungsvariablen", "actions": "Aktions-/Ereignisnamen (Funktionslandkarte)",
+    }
+    for key, label in labels.items():
+        if facts.get(key):
+            lines.append(f"**{label}:** " + ", ".join(facts[key]))
+    if facts.get("texts"):
+        lines.append("**Texte/Meldungen der Oberfläche (Auswahl, deutsch/englisch):**\n"
+                     + "\n".join(f"- {clip(t, 160)}" for t in facts["texts"]))
+    sections = []
+    if lines:
+        sections.append(Section(title, text="\n\n".join(lines), llm_priority=0))
+    if facts.get("apis"):
+        rows = [[label, str(n)] for label, n in sorted(facts["apis"].items(), key=lambda kv: -kv[1])]
+        sections.append(Section("Genutzte Plattform-Funktionen", table=Table(["Funktion", "Fundstellen"], rows),
+                                llm_priority=0))
+    if facts.get("hosts"):
+        order = {"eigener Dienst": 0, "Fremddienst/CDN": 1, "Teilen/Einbettung (soziale Netzwerke)": 2}
+        rows = [[h, d["kind"], str(d["count"]), clip(d["example"], 110)]
+                for h, d in sorted(facts["hosts"].items(), key=lambda kv: (order.get(kv[1]["kind"], 3), -kv[1]["count"]))]
+        sections.append(Section("Angesprochene Server/Dienste (aus dem Code)",
+                                table=Table(["Host", "Art", "Vorkommen", "Beispiel"], rows[:40], total=len(rows)),
+                                text="Adressen im Code – ob und wann sie aufgerufen werden, ist statisch nicht belegt. "
+                                     "Links aus Fehlermeldungen/Doku eingebauter Bibliotheken sind ausgeblendet.",
+                                llm_priority=0))
+    return sections
+
+
+def merge(maps: list[dict]) -> dict:
+    out: dict = {}
+    for m in maps:
+        for key, value in m.items():
+            if key == "hosts":
+                hosts = out.setdefault("hosts", {})
+                for h, d in value.items():
+                    if h in hosts:
+                        hosts[h]["count"] += d["count"]
+                    else:
+                        hosts[h] = dict(d)
+            elif key == "apis":
+                apis = out.setdefault("apis", {})
+                for label, n in value.items():
+                    apis[label] = apis.get(label, 0) + n
+            elif key == "ipc":
+                out.setdefault("ipc", {}).update({k: v for k, v in value.items() if k not in out.get("ipc", {})})
+            elif key == "env":
+                continue  # meist Umgebungsvariablen eingebauter Bibliotheken (CI, Cloud) – in der Gesamtsicht weglassen
+            else:
+                lst = out.setdefault(key, [])
+                lst.extend(v for v in value if v not in lst)
+    if "texts" in out:
+        out["texts"] = out["texts"][:40]
+    if "actions" in out:
+        out["actions"] = out["actions"][:120]
+    return out
+
+
+def aggregate(result: AnalysisResult) -> None:
+    """Landkarten aller Dateien einer App zusammenführen – damit die Gesamt-Doku die Funktionen sieht."""
+    maps = [n.app_map for n in result.walk() if n is not result and n.app_map]
+    if len(maps) < 1 or not result.children:
+        return
+    merged = merge(maps)
+    for sec in render(merged, "Funktionslandkarte der gesamten App"):
+        if sec.title != "Funktionslandkarte der gesamten App":
+            sec.title += " – gesamte App"
+        result.add(sec)
 
 
 class JSBundleAnalyzer(Analyzer):
@@ -135,27 +292,10 @@ class JSBundleAnalyzer(Analyzer):
         return lang in ("javascript", "typescript", "html")
 
     def analyze(self, ctx: Context, result: AnalysisResult) -> None:
-        text = ctx.data.decode("utf-8", "replace")
-        facts = extract(text)
+        own = set(ctx.shared.get("first_party_tokens", ()))
+        facts = extract(ctx.data.decode("utf-8", "replace"), own)
         if not facts:
             return
-        lines = []
-        labels = {
-            "api_paths": "API-Pfade", "ipc": "IPC-Kanäle (Oberfläche ↔ Hauptprozess)",
-            "bridge": "Für die Oberfläche freigegebene Schnittstellen (contextBridge)",
-            "protocols": "Eigene URL-Protokolle", "switches": "Chromium-Schalter", "storage": "Gespeicherte Einstellungen (localStorage)",
-            "env": "Umgebungsvariablen", "actions": "Aktions-/Ereignisnamen (Funktionslandkarte)",
-            "texts": "Texte/Meldungen der Oberfläche",
-        }
-        for key, label in labels.items():
-            if facts.get(key):
-                sep = "\n" if key == "texts" else ", "
-                lines.append(f"**{label}:**{' ' if sep == ', ' else sep}" + sep.join(facts[key]))
-        result.add(Section("Bundle-Auswertung (Funktionslandkarte)", text="\n\n".join(lines), llm_priority=0))
-        if facts.get("apis"):
-            result.add(Section("Genutzte Plattform-Funktionen", table=Table(["Funktion", "Fundstellen"], facts["apis"]),
-                               llm_priority=0))
-        if facts.get("hosts"):
-            result.add(Section("Angesprochene Server/Dienste (aus dem Code)",
-                               table=Table(["Host", "Vorkommen", "Beispiel"], facts["hosts"]), llm_priority=0,
-                               text="Adressen im Code – ob und wann sie aufgerufen werden, ist statisch nicht belegt."))
+        result.app_map = facts
+        for sec in render(facts, "Bundle-Auswertung (Funktionslandkarte)"):
+            result.add(sec)

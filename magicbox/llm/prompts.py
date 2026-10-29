@@ -63,10 +63,11 @@ def system_prompt(s: Settings) -> str:
         "9. Funktionen bekannter Laufzeitumgebungen und Bibliotheken (V8, Node.js, Chromium, OpenSSL, Qt …) gehören "
         "nicht zur eigentlichen Programmlogik – beschreibe sie nur als verwendete Technik. Ist eine "
         "Laufzeitumgebung genannt, erkläre, wo die eigentliche Programmlogik liegt.\n"
-        "10. Gibt es eine „Bundle-Auswertung (Funktionslandkarte)“, nutze IPC-Kanäle, Aktions-/Ereignisnamen, "
+        "10. Gibt es eine „Funktionslandkarte“ (je Datei oder für die gesamte App), nutze IPC-Kanäle, Aktions-/Ereignisnamen, "
         "Endpunkte und Oberflächentexte, um konkrete Funktionen der Anwendung zu benennen (z. B. „Titel herunterladen“ "
         "statt „Netzwerkoperationen“). Minifizierter Code hat verkürzte Variablennamen – stütze dich auf diese "
-        "Zeichenketten statt auf die Namen."
+        "Zeichenketten statt auf die Namen. Steht dort eine Tabelle angesprochener Server, behaupte nicht, es "
+        "gäbe keine Adressen."
     )
 
 

@@ -109,6 +109,8 @@ def _readability(s: str) -> tuple:
     return (not natural, -min(words, 10), -min(len(s), 80))
 
 
+SCHEMA_URL_RE = re.compile(r"://(?:[\w-]+\.)*(?:w3\.org|purl\.org|ns\.adobe\.com|schemas\.microsoft\.com|"
+                           r"schemas\.openxmlformats\.org|xmlsoap\.org|apple\.com/DTDs)/", re.I)
 # Für diese Kategorien nur den gefundenen Wert zeigen, nicht die ganze Zeichenkette
 VALUE_ONLY = {"URL", "IP-Adresse", "E-Mail"}
 
@@ -121,6 +123,8 @@ def classify(strings: list[str]) -> dict[str, list[str]]:
             if not m or (name == "IP-Adresse" and not _plausible_ip(s)):
                 continue
             value = m.group().rstrip(".,;:)'\"") if name in VALUE_ONLY else s
+            if name == "URL" and SCHEMA_URL_RE.search(value):
+                continue  # Namensraum-Kennungen (XMP-Metadaten, XML-Schemas) – keine Server
             bucket = cats.setdefault(name, [])
             if len(bucket) < 60 and value not in bucket:
                 bucket.append(value)

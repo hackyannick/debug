@@ -117,6 +117,9 @@ def source_language(data: bytes, name: str) -> str:
             return lang
     if lower in ("dockerfile", "makefile"):
         return lower
+    head = data[:400].lstrip().upper()
+    if head.startswith((b"BEGIN TRANSACTION", b"CREATE TABLE", b"PRAGMA ", b"INSERT INTO", b"ALTER TABLE")):
+        return "sql"  # z. B. SQL-Skripte mit Endung .sqlite/.db
     first = data[:200].split(b"\n", 1)[0]
     if first.startswith(b"#!"):
         interp = first[2:].decode("latin-1").strip().split()
