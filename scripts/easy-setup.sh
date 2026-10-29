@@ -280,8 +280,9 @@ kratos_admin_exposed() {  # warnt, wenn die Admin API (ohne Authentisierung!) ni
         case "$addr" in
             127.*:"$port"|"[::1]:$port"|"") ;;
             *:"$port")
-                warn "SICHERHEIT: Kratos Admin API lauscht auf $addr – ohne Authentisierung aus dem Netz erreichbar!"
-                info "In /etc/kratos/kratos.yml unter serve.admin 'host: 127.0.0.1' setzen und Kratos neu starten." ;;
+                warn "SICHERHEIT: Kratos Admin API lauscht auf $addr – sie hat keine Authentisierung."
+                info "Entweder nur lokal binden (kratos.yml: serve.admin.host 127.0.0.1) oder Port $port per Firewall"
+                info "auf die Rechner beschränken, die sie wirklich brauchen." ;;
         esac
     done < <(ss -ltnpH 2>/dev/null | awk '/kratos/{print $4}' | sort -u || true)
     return 0
