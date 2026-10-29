@@ -272,8 +272,24 @@ role_gateway() {
 EOF
 }
 
+kratos_admin_exposed() {  # warnt, wenn die Admin API (ohne Authentisierung!) nicht nur auf localhost lauscht
+    local port="${1##*:}" addr
+    port="${port%%/*}"
+    command -v ss >/dev/null || return 0
+    while read -r addr; do
+        case "$addr" in
+            127.*:"$port"|"[::1]:$port"|"") ;;
+            *:"$port")
+                warn "SICHERHEIT: Kratos Admin API lauscht auf $addr – ohne Authentisierung aus dem Netz erreichbar!"
+                info "In /etc/kratos/kratos.yml unter serve.admin 'host: 127.0.0.1' setzen und Kratos neu starten." ;;
+        esac
+    done < <(ss -ltnpH 2>/dev/null | awk '/kratos/{print $4}' | sort -u || true)
+    return 0
+}
+
 kratos_check() {  # kratos_check URL – mit Diagnose, wenn es nicht klappt
     local code ports
+    kratos_admin_exposed "$1"
     code="$(http_code --max-time 5 "$1/admin/identities")"
     case "$code" in
         200) ok "Kratos Admin API erreichbar ($1)"; return 0 ;;
@@ -377,6 +393,12 @@ resolve_public() {  # A-Record über einen öffentlichen Resolver – vorbei an 
         dig +short +time=3 +tries=1 A "$1" @1.1.1.1 2>/dev/null | grep -E '^[0-9.]+$' | tail -1 || true
     elif command -v host >/dev/null; then
         host -t A -W 3 "$1" 1.1.1.1 2>/dev/null | awk '/has address/{print $4}' | tail -1 || true
+    else  # ohne dig/host: DNS-over-HTTPS bei 1.1.1.1
+        curl -s --max-time 5 -H 'accept: application/dns-json' "https://1.1.1.1/dns-query?name=$1&type=A" 2>/dev/null \
+            | python3 -c 'import json,sys
+try: a=[x["data"] for x in json.load(sys.stdin).get("Answer",[]) if x.get("type")==1]
+except Exception: a=[]
+print(a[-1] if a else "")' || true
     fi
 }
 
@@ -386,7 +408,7 @@ dns_report() {
     pub_id="$(resolve_public "$ID_HOST")"
     pub_mb="$(resolve_public "$MB_DOMAIN")"
     if [ -z "$pub_id$pub_mb" ]; then
-        info "Öffentliches DNS nicht prüfbar (dig/host fehlt oder 1.1.1.1 nicht erreichbar)."
+        info "Öffentliches DNS nicht prüfbar (1.1.1.1 nicht erreichbar)."
     elif [ -z "$pub_mb" ]; then
         warn "Öffentlich löst $MB_DOMAIN nicht auf – A-Eintrag auf ${pub_id:-die öffentliche IP} anlegen (wie $ID_HOST)."
     elif [ -n "$pub_id" ] && [ "$pub_mb" != "$pub_id" ]; then
