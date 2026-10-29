@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hmac
+import html
 import ipaddress
 import json
 import mimetypes
@@ -20,6 +21,7 @@ from magicbox.config import Settings
 from magicbox.llm.client import LLMClient, LLMError
 
 from .auth import COOKIE, AuthFailed, Authenticator, Forbidden, Identity
+from .oidc import SESSION_COOKIE, STATE_COOKIE, OIDCError
 from .jobs import FolderWatcher, JobManager
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
@@ -48,7 +50,7 @@ class MagicBoxServer:
         self.settings = settings
         self.config_path = config_path
         self.token = settings.web_token if token is None else token
-        self.auth = Authenticator(settings, self.token)
+        self.auth = Authenticator(settings, self.token, data_dir=settings.data_dir)
         self.manager = JobManager(settings)
         self.httpd = ThreadingHTTPServer((host or settings.host, settings.port if port is None else port),
                                          self._handler_class())
@@ -127,7 +129,8 @@ class MagicBoxServer:
                 self.send_header("Referrer-Policy", "no-referrer")
                 self.send_header("Cache-Control", "no-store")
                 for k, v in (extra or {}).items():
-                    self.send_header(k, v)
+                    for item in (v if isinstance(v, list) else [v]):
+                        self.send_header(k, item)
                 self.end_headers()
                 if self.command != "HEAD":
                     self.wfile.write(body)
@@ -202,6 +205,8 @@ class MagicBoxServer:
                         return self._index()
                     if method == "GET" and path == "/auth/logout":
                         return self._logout()
+                    if method == "GET" and path in ("/auth/login", "/auth/callback") and server.auth.oidc:
+                        return self._oidc_login() if path == "/auth/login" else self._oidc_callback()
                     if not path.startswith("/api/"):
                         return self._error(404, "Nicht gefunden")
                     if path == "/api/login" and method == "POST":
@@ -238,16 +243,52 @@ class MagicBoxServer:
                     except AuthFailed as exc:
                         if exc.login_url:
                             return self._send(303, b"", "text/plain", {"Location": exc.login_url})
-                        return self._send(401, _page("Anmeldung erforderlich", str(exc)), "text/html; charset=utf-8")
+                        return self._send(401, _page("Anmeldung erforderlich", html.escape(str(exc))),
+                                          "text/html; charset=utf-8")
                     except Forbidden as exc:
-                        return self._send(403, _page("Kein Zugriff", f"{exc} <a href='/auth/logout'>Abmelden</a>"),
+                        return self._send(403, _page("Kein Zugriff", f"{html.escape(str(exc))} <a href='/auth/logout'>Abmelden</a>"),
                                           "text/html; charset=utf-8")
                 return self._static("/static/index.html")
 
             def _logout(self) -> None:
-                target = server.auth.logout_url(self.headers, self._return_to()) or "/"
-                clear = f"{COOKIE}=; Max-Age=0; HttpOnly; SameSite=Strict; Path=/"
+                clear = [f"{COOKIE}=; Max-Age=0; HttpOnly; SameSite=Strict; Path=/"]
+                if server.auth.oidc:
+                    oidc = server.auth.oidc
+                    target = oidc.logout(self.headers) or "/"
+                    clear.append(oidc.cookie(SESSION_COOKIE, "", max_age=0))
+                else:
+                    target = server.auth.logout_url(self.headers, self._return_to()) or "/"
                 return self._send(303, b"", "text/plain", {"Location": target, "Set-Cookie": clear})
+
+            def _oidc_login(self) -> None:
+                oidc = server.auth.oidc
+                try:
+                    url, state = oidc.begin(self._query().get("next", "/"))
+                except OIDCError as exc:
+                    return self._send(502, _page("Anmeldung nicht möglich", html.escape(str(exc))),
+                                      "text/html; charset=utf-8")
+                return self._send(303, b"", "text/plain",
+                                  {"Location": url, "Set-Cookie": oidc.cookie(STATE_COOKIE, state, max_age=600)})
+
+            def _oidc_callback(self) -> None:
+                oidc = server.auth.oidc
+                retry = "<a href='/auth/login'>Erneut anmelden</a>"
+                try:
+                    ident, id_token, next_path = oidc.complete(self._query(), self.headers.get("Cookie", ""))
+                    server.auth.check_access(ident)
+                except OIDCError as exc:
+                    return self._send(400, _page("Anmeldung fehlgeschlagen", f"{html.escape(str(exc))}<br>{retry}"),
+                                      "text/html; charset=utf-8")
+                except Forbidden as exc:
+                    return self._send(403, _page("Kein Zugriff", f"{html.escape(str(exc))}<br>"
+                                                 "<a href='/auth/logout'>Abmelden</a>"), "text/html; charset=utf-8")
+                sid = oidc.create_session(ident, id_token)
+                cookies = [oidc.cookie(SESSION_COOKIE, sid, max_age=self.server_settings_hours()),
+                           oidc.cookie(STATE_COOKIE, "", max_age=0)]
+                return self._send(303, b"", "text/plain", {"Location": next_path, "Set-Cookie": cookies})
+
+            def server_settings_hours(self) -> int:
+                return server.settings.oidc_session_hours * 3600
 
             def _static(self, path: str) -> None:
                 name = path[len("/static/"):]
@@ -379,11 +420,9 @@ class MagicBoxServer:
 
 
 def _page(title: str, body: str) -> bytes:
-    import html as _html
-
-    return (f"<!doctype html><meta charset='utf-8'><title>{_html.escape(title)}</title>"
+    return (f"<!doctype html><meta charset='utf-8'><title>{html.escape(title)}</title>"
             f"<body style='font-family:system-ui;max-width:640px;margin:15vh auto;padding:0 16px'>"
-            f"<h1>🪄 {_html.escape(title)}</h1><p>{body}</p></body>").encode()
+            f"<h1>🪄 {html.escape(title)}</h1><p>{body}</p></body>").encode()
 
 
 def serve(settings: Settings, host: str | None = None, port: int | None = None, watch: list[Path] | None = None,
@@ -395,6 +434,8 @@ def serve(settings: Settings, host: str | None = None, port: int | None = None, 
     print(f"   Anmeldung: {srv.auth.mode}")
     if srv.httpd.server_address[0] not in ("127.0.0.1", "::1") and not srv.auth.protects:
         print("⚠  Server ist im Netzwerk erreichbar, aber ohne Anmeldung. Empfohlen: web_token oder auth_mode (Ory) setzen.")
+    if srv.auth.mode == "oidc" and not srv.settings.public_url:
+        print("⚠  auth_mode=oidc: public_url fehlt (z. B. https://magicbox.hackdv.com) – Rücksprung-URL unbekannt.")
     if srv.auth.mode == "oathkeeper" and srv.httpd.server_address[0] not in ("127.0.0.1", "::1"):
         print("⚠  auth_mode=oathkeeper: Magic Box sollte nur auf 127.0.0.1 lauschen und ausschließlich über Oathkeeper erreichbar sein.")
     try:

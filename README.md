@@ -103,8 +103,9 @@ Oberfläche oben unter **🧰 Werkzeuge**.
 
 - **Nie ausgeführt:** alles ist statische Analyse. Proben werden ohne Ausführungsrechte gespeichert und nie
   wieder ausgeliefert (nur Berichte).
-- **Anmeldung:** Zugangsschlüssel oder dein **Ory-Stack** (Kratos-Sitzung bzw. Oathkeeper-ID-Token) – inkl.
-  Captcha/2FA aus deinem Login-UI, Freigabe nach E-Mail/Domain, optional nur mit zweitem Faktor.
+- **Anmeldung:** Zugangsschlüssel oder dein **Ory-Stack** – als OIDC-Client bei Hydra (empfohlen), über die
+  Kratos-Sitzung oder hinter Oathkeeper. Captcha/2FA kommen aus deinem Login-UI, Freigabe nach Gruppe
+  (`groups`-Claim), E-Mail oder Domain.
   Anleitung: [docs/Ory-Anmeldung.md](docs/Ory-Anmeldung.md).
 - **Server-Härtung:** systemd-Sandbox (read-only System, kein Home, eigene /tmp), CSRF-Schutz,
   Schutz vor DNS-Rebinding, Content-Security-Policy.
@@ -146,7 +147,7 @@ magicbox/
 ├── yara_rules/  mitgelieferte Basisregeln
 ├── llm/         Client (Ollama/OpenAI-kompatibel), Prompts (Profile), Map-Reduce-Dokumentierer
 ├── report/      Bericht (HTML/MD/JSON/CSV)
-├── server/      HTTP-API, Live-Ereignisse, Auftragsverwaltung, Drop-Ordner, Anmeldung (Token/Ory)
+├── server/      HTTP-API, Live-Ereignisse, Auftragsverwaltung, Drop-Ordner, Anmeldung (Token/OIDC/Kratos/Oathkeeper)
 ├── web/         Oberfläche (HTML/CSS/JS, ohne Abhängigkeiten)
 ├── gui/         Desktop-App (Qt WebEngine)
 ├── engine.py · pipeline.py · tools.py · cli.py

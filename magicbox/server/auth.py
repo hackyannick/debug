@@ -1,4 +1,6 @@
-"""Anmeldung für den Magic-Box-Server: Zugangsschlüssel, Ory Kratos (Session) oder Ory Oathkeeper (ID-Token).
+"""Anmeldung für den Magic-Box-Server: Zugangsschlüssel, Ory Hydra (OIDC), Ory Kratos (Session) oder Oathkeeper.
+
+OIDC:       Die Magic Box ist ein normaler OIDC-Client (z. B. gegen Ory Hydra) – siehe ``oidc.py``.
 
 Kratos:     Die Magic Box prüft das Session-Cookie (``ory_kratos_session`` bzw. ``ory_session_*``) per
             ``GET /sessions/whoami`` bei Kratos. Ohne gültige Sitzung geht es in den Kratos-Login-Flow
@@ -22,6 +24,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
+from typing import Callable
 
 from magicbox.config import Settings
 
@@ -41,7 +44,8 @@ _DIRECT = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 class Identity:
     id: str
     name: str
-    method: str  # token | kratos | oathkeeper | none
+    method: str  # token | kratos | oathkeeper | oidc | none
+    groups: tuple[str, ...] = ()
 
 
 class AuthFailed(Exception):
@@ -94,18 +98,107 @@ def allowed(name: str, rules: list[str]) -> bool:
     return False
 
 
-class Authenticator:
-    def __init__(self, settings: Settings, token: str):
-        self.s = settings
-        self.token = token
-        self._cache: dict[str, tuple[float, Identity | None, str]] = {}
-        self._jwks: dict[str, dict] = {}
-        self._jwks_time = 0.0
+class JWKSVerifier:
+    """Prüft RS256/384/512-JWTs gegen einen JWKS-Endpunkt (mit Cache und Nachladen bei Schlüsselrotation)."""
+
+    def __init__(self, url: str | Callable[[], str]):
+        self._url = url
+        self._keys: dict[str, dict] = {}
+        self._time = 0.0
         self._lock = threading.Lock()
 
     @property
+    def url(self) -> str:
+        return self._url() if callable(self._url) else self._url
+
+    def verify(self, jwt: str, issuer: str = "", audience: str = "", nonce: str | None = None) -> dict:
+        if jwt.count(".") != 2:
+            raise ValueError("kein JWT")
+        head_b64, body_b64, sig_b64 = jwt.split(".")
+        try:
+            header = json.loads(b64url(head_b64))
+            claims = json.loads(b64url(body_b64))
+            signature = b64url(sig_b64)
+        except (ValueError, json.JSONDecodeError) as exc:
+            raise ValueError("nicht dekodierbar") from exc
+        alg = header.get("alg")
+        if alg not in DIGEST_INFO:
+            raise ValueError(f"Algorithmus {alg!r} nicht erlaubt")
+        key = self._key(header.get("kid"))
+        n, e = int.from_bytes(b64url(key["n"]), "big"), int.from_bytes(b64url(key["e"]), "big")
+        if not rsa_verify(alg, n, e, f"{head_b64}.{body_b64}".encode(), signature):
+            raise ValueError("Signatur falsch")
+        now = time.time()
+        if "exp" not in claims or now > float(claims["exp"]) + 60:
+            raise ValueError("abgelaufen")
+        if "nbf" in claims and now < float(claims["nbf"]) - 60:
+            raise ValueError("noch nicht gültig")
+        if issuer and claims.get("iss", "").rstrip("/") != issuer.rstrip("/"):
+            raise ValueError("falscher Aussteller (iss)")
+        if audience:
+            aud = claims.get("aud")
+            if audience not in (aud if isinstance(aud, list) else [aud]):
+                raise ValueError("falsche Zielgruppe (aud)")
+        if nonce is not None and not hmac.compare_digest(str(claims.get("nonce", "")), nonce):
+            raise ValueError("falsche nonce")
+        return claims
+
+    def _key(self, kid: str | None) -> dict:
+        with self._lock:
+            fresh = time.monotonic() - self._time < JWKS_TTL
+            key = self._pick(kid)
+        # unbekanntes kid → neu laden (z. B. Schlüsselrotation), aber höchstens alle 10 s
+        if (key is None and time.monotonic() - self._time > 10) or not fresh:
+            self._refresh()
+            with self._lock:
+                key = self._pick(kid)
+        if key is None:
+            raise ValueError("unbekannter Schlüssel (kid)")
+        return key
+
+    def _pick(self, kid: str | None) -> dict | None:
+        if kid:
+            return self._keys.get(kid)
+        rsa = [k for k in self._keys.values() if k.get("kty") == "RSA"]
+        return rsa[0] if len(rsa) == 1 else None
+
+    def _refresh(self) -> None:
+        url = self.url
+        if not url:
+            raise ValueError("JWKS-URL ist nicht gesetzt")
+        try:
+            data = get_json(url, {"Accept": "application/json"})
+        except (OSError, ValueError, urllib.error.URLError) as exc:
+            raise ValueError(f"JWKS nicht abrufbar: {exc}") from exc
+        keys = {k.get("kid", f"_{i}"): k for i, k in enumerate(data.get("keys", []))
+                if k.get("kty") == "RSA" and k.get("use", "sig") == "sig"}
+        with self._lock:
+            self._keys = keys
+            self._time = time.monotonic()
+
+
+def get_json(url: str, headers: dict, data: bytes | None = None) -> dict:
+    req = urllib.request.Request(url, headers=headers, data=data, method="POST" if data is not None else "GET")
+    with _DIRECT.open(req, timeout=15) as r:
+        return json.loads(r.read() or b"{}")
+
+
+class Authenticator:
+    def __init__(self, settings: Settings, token: str, data_dir=None):
+        self.s = settings
+        self.token = token
+        self._cache: dict[str, tuple[float, Identity | None, str]] = {}
+        self._lock = threading.Lock()
+        self.oathkeeper_jwks = JWKSVerifier(lambda: self.s.oathkeeper_jwks_url)
+        self.oidc = None
+        if settings.auth_mode == "oidc":
+            from .oidc import OIDCClient
+
+            self.oidc = OIDCClient(settings, data_dir)
+
+    @property
     def mode(self) -> str:
-        return self.s.auth_mode if self.s.auth_mode in ("kratos", "oathkeeper") else "token"
+        return self.s.auth_mode if self.s.auth_mode in ("kratos", "oathkeeper", "oidc") else "token"
 
     @property
     def protects(self) -> bool:
@@ -128,13 +221,25 @@ class Authenticator:
             raise AuthFailed("Zugangsschlüssel erforderlich")
         if self.mode == "kratos":
             ident = self._kratos(headers, return_to)
+        elif self.mode == "oidc":
+            ident = self.oidc.session_identity(headers)
+            if ident is None:
+                raise AuthFailed("Nicht angemeldet", self.login_url(return_to))
         else:
             ident = self._oathkeeper(bearer, return_to)
-        if not allowed(ident.name, self.s.auth_allowed):
-            raise Forbidden(f"{ident.name} ist für die Magic Box nicht freigeschaltet.")
+        self.check_access(ident)
         return ident
 
+    def check_access(self, ident: Identity) -> None:
+        if not allowed(ident.name, self.s.auth_allowed):
+            raise Forbidden(f"{ident.name} ist für die Magic Box nicht freigeschaltet.")
+        if self.s.auth_groups and not set(self.s.auth_groups) & set(ident.groups):
+            raise Forbidden(f"{ident.name} ist in keiner der Gruppen {', '.join(self.s.auth_groups)}.")
+
     def login_url(self, return_to: str, aal2: bool = False) -> str:
+        if self.mode == "oidc":
+            path = urllib.parse.urlsplit(return_to).path or "/"
+            return "/auth/login?" + urllib.parse.urlencode({"next": path})
         if self.s.auth_login_url:
             sep = "&" if "?" in self.s.auth_login_url else "?"
             return f"{self.s.auth_login_url}{sep}return_to={urllib.parse.quote(return_to, safe='')}"
@@ -214,13 +319,12 @@ class Authenticator:
         traits = identity.get("traits") or {}
         name = (traits.get("email") or traits.get("username")
                 or (traits.get("name") if isinstance(traits.get("name"), str) else "") or identity.get("id", "?"))
-        return Identity(identity.get("id", ""), str(name), "kratos"), ""
+        groups = traits.get("groups") if isinstance(traits.get("groups"), list) else []
+        return Identity(identity.get("id", ""), str(name), "kratos", tuple(map(str, groups))), ""
 
     @staticmethod
     def _get_json(url: str, headers: dict) -> dict:
-        req = urllib.request.Request(url, headers=headers)
-        with _DIRECT.open(req, timeout=10) as r:
-            return json.loads(r.read() or b"{}")
+        return get_json(url, headers)
 
     # ------------------------------------------------------------------ Oathkeeper (ID-Token)
     def _oathkeeper(self, jwt: str, return_to: str) -> Identity:
@@ -235,65 +339,8 @@ class Authenticator:
         name = claims.get("email") or traits.get("email") or claims.get("preferred_username") or claims.get("sub", "?")
         if self.s.auth_require_aal2 and claims.get("aal", session.get("authenticator_assurance_level")) not in (None, "aal2"):
             raise AuthFailed("Zweiter Faktor erforderlich", self.login_url(return_to, aal2=True))
-        return Identity(str(claims.get("sub", "")), str(name), "oathkeeper")
+        groups = claims.get("groups") if isinstance(claims.get("groups"), list) else []
+        return Identity(str(claims.get("sub", "")), str(name), "oathkeeper", tuple(map(str, groups)))
 
     def verify_jwt(self, jwt: str) -> dict:
-        head_b64, body_b64, sig_b64 = jwt.split(".")
-        try:
-            header = json.loads(b64url(head_b64))
-            claims = json.loads(b64url(body_b64))
-            signature = b64url(sig_b64)
-        except (ValueError, json.JSONDecodeError) as exc:
-            raise ValueError("nicht dekodierbar") from exc
-        alg = header.get("alg")
-        if alg not in DIGEST_INFO:
-            raise ValueError(f"Algorithmus {alg!r} nicht erlaubt")
-        key = self._key(header.get("kid"))
-        n, e = int.from_bytes(b64url(key["n"]), "big"), int.from_bytes(b64url(key["e"]), "big")
-        if not rsa_verify(alg, n, e, f"{head_b64}.{body_b64}".encode(), signature):
-            raise ValueError("Signatur falsch")
-        now = time.time()
-        if "exp" not in claims or now > float(claims["exp"]) + 60:
-            raise ValueError("abgelaufen")
-        if "nbf" in claims and now < float(claims["nbf"]) - 60:
-            raise ValueError("noch nicht gültig")
-        if self.s.oathkeeper_issuer and claims.get("iss") != self.s.oathkeeper_issuer:
-            raise ValueError("falscher Aussteller (iss)")
-        if self.s.oathkeeper_audience:
-            aud = claims.get("aud")
-            auds = aud if isinstance(aud, list) else [aud]
-            if self.s.oathkeeper_audience not in auds:
-                raise ValueError("falsche Zielgruppe (aud)")
-        return claims
-
-    def _key(self, kid: str | None) -> dict:
-        with self._lock:
-            fresh = time.monotonic() - self._jwks_time < JWKS_TTL
-            key = self._pick(kid)
-        # unbekanntes kid → neu laden (z. B. Schlüsselrotation), aber höchstens alle 10 s
-        if (key is None and time.monotonic() - self._jwks_time > 10) or not fresh:
-            self._refresh_jwks()
-            with self._lock:
-                key = self._pick(kid)
-        if key is None:
-            raise ValueError("unbekannter Schlüssel (kid)")
-        return key
-
-    def _pick(self, kid: str | None) -> dict | None:
-        if kid:
-            return self._jwks.get(kid)
-        rsa = [k for k in self._jwks.values() if k.get("kty") == "RSA"]
-        return rsa[0] if len(rsa) == 1 else None
-
-    def _refresh_jwks(self) -> None:
-        if not self.s.oathkeeper_jwks_url:
-            raise ValueError("oathkeeper_jwks_url ist nicht gesetzt")
-        try:
-            data = self._get_json(self.s.oathkeeper_jwks_url, {"Accept": "application/json"})
-        except (OSError, ValueError, urllib.error.URLError) as exc:
-            raise ValueError(f"JWKS nicht abrufbar: {exc}") from exc
-        keys = {k.get("kid", f"_{i}"): k for i, k in enumerate(data.get("keys", []))
-                if k.get("kty") == "RSA" and k.get("use", "sig") == "sig"}
-        with self._lock:
-            self._jwks = keys
-            self._jwks_time = time.monotonic()
+        return self.oathkeeper_jwks.verify(jwt, issuer=self.s.oathkeeper_issuer, audience=self.s.oathkeeper_audience)

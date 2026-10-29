@@ -74,7 +74,8 @@ class Settings:
     port: int = 8765
     web_token: str = ""  # wenn gesetzt, verlangt die Web-Oberfläche diesen Zugangsschlüssel (auch für Skripte/API)
 
-    # Anmeldung: "token" (Zugangsschlüssel) | "kratos" (Ory-Kratos-Session) | "oathkeeper" (Ory-Oathkeeper-JWT)
+    # Anmeldung: "token" (Zugangsschlüssel) | "oidc" (z. B. Ory Hydra) | "kratos" (Kratos-Session)
+    #            | "oathkeeper" (Oathkeeper-ID-Token)
     auth_mode: str = "token"
     public_url: str = ""  # externe Adresse der Magic Box (für Rücksprung nach dem Login), z. B. https://magicbox.example.de
     kratos_public_url: str = ""  # Kratos Public API, von der Magic Box aus erreichbar, z. B. http://127.0.0.1:4433
@@ -84,6 +85,16 @@ class Settings:
     oathkeeper_audience: str = ""  # erwartetes "aud" im ID-Token (leer = nicht prüfen)
     auth_login_url: str = ""  # optional: eigene Login-Seite statt des Kratos-Browser-Flows
     auth_allowed: list[str] = field(default_factory=list)  # E-Mails oder "@domain"; leer = alle Angemeldeten
+    auth_groups: list[str] = field(default_factory=list)  # erlaubte Gruppen (Claim/Trait "groups"); leer = egal
+    # OIDC (Authorization Code + PKCE), z. B. gegen Ory Hydra
+    oidc_issuer: str = ""  # öffentlicher Aussteller, z. B. https://id.hackdv.com/
+    oidc_internal_base: str = ""  # Discovery/Token/JWKS intern abrufen, z. B. http://127.0.0.1:4444 (kein Hairpin-NAT)
+    oidc_client_id: str = ""
+    oidc_client_secret: str = ""
+    oidc_scopes: str = "openid email profile"
+    oidc_token_auth: str = "client_secret_basic"  # oder "client_secret_post"
+    oidc_post_logout_uri: str = ""  # nur setzen, wenn beim Client als post_logout_redirect_uri registriert
+    oidc_session_hours: int = 12
     auth_require_aal2: bool = False  # nur Sitzungen mit zweitem Faktor (Kratos AAL2) zulassen
     max_upload_mb: int = 2048
 
