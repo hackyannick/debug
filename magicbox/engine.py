@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import time
 import traceback
 from pathlib import Path
 from typing import Callable
@@ -61,8 +62,14 @@ class Engine:
                 raise Cancelled()
             if not analyzer.matches(ctx, result):
                 continue
+            hint = getattr(analyzer, "slow_hint", "")
+            if hint:
+                self.log(f"  … {analyzer.name}: {hint}")
+            started = time.monotonic()
             try:
                 analyzer.analyze(ctx, result)
+                if hint:
+                    self.log(f"  ✓ {analyzer.name} fertig ({time.monotonic() - started:.0f} s)")
             except Cancelled:
                 raise
             except Exception as exc:  # ein kaputter Analyzer darf den Rest nicht stoppen

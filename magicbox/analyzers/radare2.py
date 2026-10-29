@@ -37,6 +37,7 @@ def _run(r2: str, path: str, commands: str, timeout: int) -> str:
 
 class Radare2Analyzer(Analyzer):
     name = "radare2"
+    slow_hint = "Funktionsanalyse und Pseudocode laufen"
     kinds = ("pe", "elf", "macho")
 
     def matches(self, ctx: Context, result: AnalysisResult) -> bool:

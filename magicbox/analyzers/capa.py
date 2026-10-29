@@ -42,6 +42,7 @@ MAX_RUNS_PER_JOB = 5  # capa braucht pro Datei Sekunden bis Minuten
 
 class CapaAnalyzer(Analyzer):
     name = "capa"
+    slow_hint = "Fähigkeiten/ATT&CK-Analyse läuft (nutzt 1 Kern, oft 1–5 Minuten)"
     kinds = ("pe", "elf")
 
     def matches(self, ctx: Context, result: AnalysisResult) -> bool:

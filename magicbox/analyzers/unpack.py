@@ -21,6 +21,7 @@ def is_upx(data: bytes, result: AnalysisResult) -> bool:
 
 class UPXUnpacker(Analyzer):
     name = "upx"
+    slow_hint = "entpacke mit UPX"
     kinds = ("pe", "elf", "macho")
 
     def matches(self, ctx: Context, result: AnalysisResult) -> bool:
