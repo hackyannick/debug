@@ -179,3 +179,27 @@ def test_radare2_pseudocode(settings, tmp_path):
     assert "main" in pseudo.code
     asm = next(s for s in r.sections if s.code_lang == "asm")
     assert asm.llm_priority > pseudo.llm_priority  # Pseudocode hat Vorrang im LLM-Kontext
+
+
+@pytest.mark.parametrize("key", ["offset", "addr"])  # radare2 < 6 bzw. ≥ 6
+def test_radare2_function_list_formats(settings, monkeypatch, key):
+    import json as _json
+
+    from magicbox.analyzers import radare2
+
+    funcs = [{"name": "main", key: 0x1149, "size": 40, "nbbs": 2, "callrefs": []},
+             {"name": "sym.imp.puts", key: 0x1030, "size": 6}]
+
+    def fake_run(r2, path, commands, timeout):
+        if commands.endswith("aflj"):
+            return _json.dumps(funcs)
+        return f"{radare2.SEP}main@0x1149\nint main() {{ puts(\"x\"); }}\n"
+
+    monkeypatch.setattr(radare2, "_run", fake_run)
+    monkeypatch.setattr(radare2, "find_r2", lambda configured: "/usr/bin/r2")
+    settings.use_radare2 = True
+    r = Engine(settings).analyze_bytes("prog", tiny_pe64())
+    assert not [e for e in r.errors if "radare2" in e], r.errors
+    table = next(s for s in r.sections if s.title.startswith("Funktionen (radare2"))
+    assert table.table.rows[0][:2] == ["main", "0x1149"]
+    assert "int main()" in next(s for s in r.sections if s.title.startswith("Pseudocode")).code

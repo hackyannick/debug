@@ -61,8 +61,11 @@ class Radare2Analyzer(Analyzer):
             result.tools.append("radare2")
             ctx.facts["radare2"] = True
 
+            # radare2 ≥ 6 nennt die Adresse "addr", ältere Versionen "offset"
+            funcs = [{**f, "addr": f.get("addr", f.get("offset"))} for f in funcs
+                     if isinstance(f, dict) and isinstance(f.get("addr", f.get("offset")), int)]
             own = [f for f in funcs if not f.get("name", "").startswith(BORING)]
-            rows = [[f["name"], hex(f["offset"]), str(f.get("size", 0)), str(f.get("nbbs", "")),
+            rows = [[f["name"], hex(f["addr"]), str(f.get("size", 0)), str(f.get("nbbs", "")),
                      str(len(f.get("callrefs", []) or []))]
                     for f in sorted(own, key=lambda f: -f.get("size", 0))[:300]]
             result.add(Section(f"Funktionen (radare2, {len(funcs)} erkannt, {len(own)} eigene)",
@@ -70,7 +73,7 @@ class Radare2Analyzer(Analyzer):
                                llm_priority=2))
 
             targets = self._pick(own, ctx.settings.max_disasm_functions)
-            cmds = [level] + [f"?e {SEP}{f['name']}@{f['offset']:#x};pdc @ {f['offset']}" for f in targets]
+            cmds = [level] + [f"?e {SEP}{f['name']}@{f['addr']:#x};pdc @ {f['addr']}" for f in targets]
             try:
                 out = _run(r2, tmp, ";".join(cmds), timeout)
             except subprocess.TimeoutExpired:
