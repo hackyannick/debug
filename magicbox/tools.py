@@ -34,6 +34,9 @@ def run(cmd: list[str], timeout: int, cwd: str | None = None) -> subprocess.Comp
     """Führt ein Werkzeug ohne Shell aus. Ausgabe wird als Text (fehlertolerant) zurückgegeben."""
     env = dict(os.environ, DOTNET_CLI_TELEMETRY_OPTOUT="1", DOTNET_NOLOGO="1")
     env.setdefault("DOTNET_ROLL_FORWARD", "Major")  # ilspycmd läuft so auch auf neueren .NET-Runtimes
+    env.setdefault("DOTNET_SYSTEM_GLOBALIZATION_INVARIANT", "1")  # keine ICU-Bibliothek nötig
+    if Path("/opt/dotnet/dotnet").exists():  # per dotnet-install.sh installiert (z. B. Debian)
+        env.setdefault("DOTNET_ROOT", "/opt/dotnet")
     return subprocess.run(cmd, capture_output=True, text=True, errors="replace", timeout=timeout, cwd=cwd, env=env,
                           stdin=subprocess.DEVNULL)
 

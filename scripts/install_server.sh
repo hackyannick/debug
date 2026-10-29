@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Magic Box – Server-Installation (Ubuntu 22.04/24.04, z. B. auf dem PowerEdge R640)
+# Magic Box – Server-Installation (Debian 12/13, Ubuntu 22.04/24.04 – z. B. auf dem PowerEdge R640)
 #
 #   sudo ./scripts/install_server.sh                       # mit Internet (einmalig), danach offline betreibbar
 #   sudo ./scripts/install_server.sh --offline /pfad/bundle # komplett ohne Internet (Bundle aus make_offline_bundle.sh)
@@ -40,20 +40,82 @@ DATA=/srv/magicbox
 CONF=/etc/magicbox
 
 # ------------------------------------------------------------------ Systempakete
+DOTNET_DIR=/opt/dotnet
+
+candidate() {  # hat apt für dieses Paket eine installierbare Version?
+    local c
+    c="$(apt-cache policy "$1" 2>/dev/null | awk '/Candidate:/{print $2}' || true)"
+    [ -n "$c" ] && [ "$c" != "(none)" ]
+}
+
+apt_install() {  # installiert, was verfügbar ist – fehlende Pakete nur als Warnung
+    local avail=() p
+    for p in "$@"; do
+        if candidate "$p"; then avail+=("$p"); else warn "Paket $p ist in den Paketquellen nicht verfügbar"; fi
+    done
+    if [ ${#avail[@]} -gt 0 ]; then apt-get install -y "${avail[@]}"; fi
+}
+
+install_radare2_release() {  # radare2 ist z. B. aus Debian entfernt worden → offizielles .deb vom Projekt
+    if command -v r2 >/dev/null; then return 0; fi
+    if [ "$(dpkg --print-architecture)" != amd64 ]; then warn "radare2: kein passendes .deb für diese Architektur"; return 0; fi
+    local url tmp
+    url="$(curl -fsSL https://api.github.com/repos/radareorg/radare2/releases/latest 2>/dev/null | python3 -c 'import json,sys
+try: assets=json.load(sys.stdin).get("assets",[])
+except Exception: assets=[]
+for a in assets:
+    n=a.get("name","")
+    if n.startswith("radare2_") and n.endswith("_amd64.deb"):
+        print(a["browser_download_url"]); break' || true)"
+    if [ -z "$url" ]; then warn "radare2-Release nicht gefunden – Analyse läuft ohne Pseudocode"; return 0; fi
+    tmp="$(mktemp --suffix .deb)"
+    if curl -fsSL -o "$tmp" "$url" && apt-get install -y "$tmp"; then
+        echo "radare2 installiert ($url)"
+    else
+        warn "radare2 konnte nicht installiert werden – Analyse läuft ohne Pseudocode"
+    fi
+    rm -f "$tmp"
+}
+
+install_dotnet() {  # .NET 8 SDK für ilspycmd: Paketquelle, sonst Microsofts dotnet-install.sh nach /opt/dotnet
+    if command -v dotnet >/dev/null || [ -x "$DOTNET_DIR/dotnet" ]; then return 0; fi
+    if candidate dotnet-sdk-8.0; then apt-get install -y dotnet-sdk-8.0; return 0; fi
+    echo ".NET 8 SDK nicht in den Paketquellen – installiere es über dotnet-install.sh nach $DOTNET_DIR"
+    local inst
+    inst="$(mktemp --suffix .sh)"
+    if curl -fsSL -o "$inst" https://dot.net/v1/dotnet-install.sh \
+        && bash "$inst" --channel 8.0 --install-dir "$DOTNET_DIR" --no-path; then
+        register_dotnet
+    else
+        warn ".NET konnte nicht installiert werden – .NET-Dateien werden nur über Metadaten analysiert"
+    fi
+    rm -f "$inst"
+}
+
+register_dotnet() {  # damit "dotnet" und die ilspycmd-Startdatei die Runtime in /opt/dotnet finden
+    ln -sf "$DOTNET_DIR/dotnet" /usr/local/bin/dotnet
+    mkdir -p /etc/dotnet
+    echo "$DOTNET_DIR" > /etc/dotnet/install_location
+}
+
 step "Systempakete"
-PKGS="python3-venv python3-pip git radare2 upx-ucl p7zip-full curl"
-[ "$WITH_DOTNET" = 1 ] && PKGS="$PKGS dotnet-sdk-8.0"
+PKGS=(python3-venv python3-pip git upx-ucl p7zip-full curl rsync)
 if [ -n "$OFFLINE" ]; then
     if compgen -G "$OFFLINE/debs/*.deb" > /dev/null; then
         apt-get install -y --no-download "$OFFLINE"/debs/*.deb || dpkg -i "$OFFLINE"/debs/*.deb
     else
-        warn "Keine .deb-Pakete im Bundle – setze voraus, dass $PKGS schon installiert sind."
+        warn "Keine .deb-Pakete im Bundle – setze voraus, dass ${PKGS[*]} schon installiert sind."
+    fi
+    if [ "$WITH_DOTNET" = 1 ] && [ -d "$OFFLINE/dotnet" ] && [ ! -x "$DOTNET_DIR/dotnet" ]; then
+        mkdir -p "$DOTNET_DIR" && cp -a "$OFFLINE"/dotnet/. "$DOTNET_DIR/" && register_dotnet
     fi
 else
     apt-get update
-    # shellcheck disable=SC2086
-    apt-get install -y $PKGS
-    apt-get install -y p7zip-rar 2>/dev/null || warn "p7zip-rar nicht verfügbar – RAR-Archive evtl. nicht entpackbar (multiverse aktivieren)."
+    apt_install "${PKGS[@]}"
+    if candidate radare2; then apt-get install -y radare2; else install_radare2_release; fi
+    if candidate p7zip-rar; then apt-get install -y p7zip-rar
+    else warn "p7zip-rar nicht verfügbar – RAR-Archive evtl. nicht entpackbar (Debian: non-free, Ubuntu: multiverse)"; fi
+    if [ "$WITH_DOTNET" = 1 ]; then install_dotnet; fi
 fi
 
 # ------------------------------------------------------------------ Benutzer & Ordner
@@ -106,7 +168,9 @@ if [ "$WITH_DOTNET" = 1 ] && command -v dotnet >/dev/null; then
     SRC_ARGS=()
     [ -n "$OFFLINE" ] && SRC_ARGS=(--add-source "$OFFLINE/nuget")
     chown -R magicbox: "$HOME_DIR/.dotnet"
-    sudo -u magicbox -H env DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 \
+    DOTNET_ENV=(DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1)
+    if [ -x "$DOTNET_DIR/dotnet" ]; then DOTNET_ENV+=(DOTNET_ROOT="$DOTNET_DIR"); fi
+    runuser -u magicbox -- env HOME="$HOME_DIR" "${DOTNET_ENV[@]}" \
         dotnet tool install -g ilspycmd --version "$ILSPY_VERSION" "${SRC_ARGS[@]}" \
         || warn "ilspycmd nicht installiert – .NET wird nur über Metadaten analysiert."
 fi

@@ -84,7 +84,7 @@ Für die Gateway-Rolle reicht die einzelne Datei `scripts/easy-setup.sh`.
 sudo ./scripts/install_server.sh --model qwen3-coder:30b
 ```
 
-Das Skript installiert alles (Werkzeuge, capa-Regeln, YARA-Forge-Regeln, ILSpy, Ollama + Modell), richtet den
+Das Skript (Debian 12/13 oder Ubuntu 22.04/24.04) installiert alles (Werkzeuge, capa-Regeln, YARA-Forge-Regeln, ILSpy, Ollama + Modell), richtet den
 gesperrten systemd-Dienst ein und zeigt am Ende die URL mit Zugangsschlüssel. Ollama bleibt dabei auf `localhost`
 – nur die Magic Box (Port 8765) ist im LAN erreichbar.
 

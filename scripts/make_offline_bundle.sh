@@ -36,10 +36,26 @@ python3 -m pip download -d "$OUT/wheels" "$ROOT[malware,capa]"
 if [ "$WITH_DEBS" = 1 ]; then
     step "Systempakete (.deb inkl. Abhängigkeiten)"
     sudo apt-get update
-    sudo apt-get install --download-only -y -o Dir::Cache::archives="$OUT/debs" \
-        python3-venv python3-pip git radare2 upx-ucl p7zip-full curl dotnet-sdk-8.0
+    PKGS=()
+    for p in python3-venv python3-pip git radare2 upx-ucl p7zip-full p7zip-rar curl rsync dotnet-sdk-8.0; do
+        c="$(apt-cache policy "$p" 2>/dev/null | awk '/Candidate:/{print $2}' || true)"
+        if [ -n "$c" ] && [ "$c" != "(none)" ]; then PKGS+=("$p"); else echo "[!] $p nicht in den Paketquellen – wird anders beschafft bzw. übersprungen"; fi
+    done
+    sudo apt-get install --download-only -y -o Dir::Cache::archives="$OUT/debs" "${PKGS[@]}"
     sudo chown -R "$(id -u):$(id -g)" "$OUT/debs"
     rm -f "$OUT/debs/lock"; rm -rf "$OUT/debs/partial"
+    if [[ " ${PKGS[*]} " != *" radare2 "* ]]; then
+        step "radare2 (offizielles .deb, z. B. für Debian)"
+        url="$(curl -fsSL https://api.github.com/repos/radareorg/radare2/releases/latest | python3 -c 'import json,sys
+for a in json.load(sys.stdin).get("assets",[]):
+    if a["name"].startswith("radare2_") and a["name"].endswith("_amd64.deb"): print(a["browser_download_url"]); break' || true)"
+        if [ -n "$url" ]; then curl -fsSL -o "$OUT/debs/$(basename "$url")" "$url"; else echo "[!] radare2-Release nicht gefunden"; fi
+    fi
+    if [[ " ${PKGS[*]} " != *" dotnet-sdk-8.0 "* ]]; then
+        step ".NET 8 SDK (dotnet-install.sh, wird nach /opt/dotnet kopiert)"
+        curl -fsSL -o /tmp/dotnet-install.sh https://dot.net/v1/dotnet-install.sh
+        bash /tmp/dotnet-install.sh --channel 8.0 --install-dir "$OUT/dotnet" --no-path
+    fi
 fi
 
 step "capa-Regeln"

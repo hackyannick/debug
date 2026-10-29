@@ -609,9 +609,10 @@ role_server() {
     local ram_gb
     ram_gb="$(awk '/MemTotal/{printf "%d", $2/1024/1024}' /proc/meminfo || echo 0)"
     local suggest="qwen2.5-coder:7b"
-    if [ "$ram_gb" -ge 96 ]; then suggest="qwen3-coder:30b"; info "${ram_gb} GB RAM – auch gpt-oss:120b wäre möglich (langsamer, gründlicher)."
-    elif [ "$ram_gb" -ge 32 ]; then suggest="qwen3-coder:30b"
-    elif [ "$ram_gb" -ge 16 ]; then suggest="qwen2.5-coder:14b"; fi
+    # MemTotal liegt unter der verbauten Größe (32 GB → ~31 GB), daher etwas großzügigere Schwellen
+    if [ "$ram_gb" -ge 90 ]; then suggest="qwen3-coder:30b"; info "${ram_gb} GB RAM – auch gpt-oss:120b wäre möglich (langsamer, gründlicher)."
+    elif [ "$ram_gb" -ge 28 ]; then suggest="qwen3-coder:30b"; info "qwen3-coder:30b braucht ~19 GB und ist dank MoE auf CPU schneller als 14b-Modelle."
+    elif [ "$ram_gb" -ge 14 ]; then suggest="qwen2.5-coder:14b"; fi
     info "Erkannt: ${ram_gb} GB RAM, $(nproc) Kerne$(grep -q avx512f /proc/cpuinfo && echo ', AVX-512')"
     ask MODEL "Modell" "${MODEL:-$suggest}"
 
@@ -724,7 +725,15 @@ lan_network() {  # Netz der ersten LAN-Schnittstelle, z. B. 10.0.201.0/24
 }
 
 configure_firewall() {
-    if ! command -v ufw >/dev/null; then warn "ufw nicht installiert – Firewall bitte selbst einrichten (Port 8765 nur vom Gateway)"; return; fi
+    if ! command -v ufw >/dev/null; then
+        if confirm "ufw (einfache Firewall) ist nicht installiert – jetzt installieren?" j; then
+            run apt-get install -y ufw >/dev/null || { warn "ufw-Installation fehlgeschlagen"; return 0; }
+        fi
+        if [ "$DRY" = 0 ] && ! command -v ufw >/dev/null; then
+            warn "Ohne ufw: Firewall bitte selbst einrichten (Port 8765 nur vom Gateway${GATEWAY_IP:+ $GATEWAY_IP})"
+            return 0
+        fi
+    fi
     local ssh_from="${SSH_CLIENT:-}"; ssh_from="${ssh_from%% *}"
     if [ "$AUTH_MODE" = oidc ] && [ -n "${GATEWAY_IP:-}" ]; then
         run ufw allow from "$GATEWAY_IP" to any port 8765 proto tcp comment 'Magic Box via Gateway' >/dev/null
