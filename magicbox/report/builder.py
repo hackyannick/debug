@@ -131,6 +131,10 @@ def rule_based_summary(result: AnalysisResult) -> str:
                 kinds[c.description] = kinds.get(c.description, 0) + 1
         top = sorted(kinds.items(), key=lambda kv: -kv[1])[:6]
         lines.append(f"Enthält {sum(kinds.values())} Dateien, u. a.: " + ", ".join(f"{n}× {d}" for d, n in top) + ".")
+    if result.profile == "allgemein":
+        lines.append("📘 Software-Dokumentation – Malware-Prüfungen (YARA, capa, IOCs, Deobfuskierung) und "
+                     "Risikobewertung sind in diesem Profil abgeschaltet.")
+        return "\n\n".join(lines)
     detections = sorted({d for r in result.walk() for d in r.detections})
     if detections:
         lines.append("YARA-Treffer: " + ", ".join(f"`{d}`" for d in detections) + ".")
@@ -170,13 +174,18 @@ def build_markdown(result: AnalysisResult, llm_error: str = "") -> str:
         out += [f"> ⚠️ KI-Dokumentation nicht verfügbar: {llm_error}", ""]
 
     findings = sorted(_all_findings(result), key=lambda rf: SEV_ORDER[rf[1].severity])
-    if findings:
+    if findings and result.profile == "allgemein":
+        out += ["## Technische Hinweise", "", "| Datei | Hinweis | Details |", "|---|---|---|"]
+        out += [f"| {_cell(r.name)} | {_cell(f.title)} | {_cell(f.detail)} |" for r, f in findings]
+        out.append("")
+    elif findings:
         out += ["## Auffälligkeiten", "", "| Stufe | Datei | Befund | Details |", "|---|---|---|---|"]
         for r, f in findings:
             out.append(f"| {SEV_ICON[f.severity]} {SEV_NAME[f.severity]} | {_cell(r.name)} | {_cell(f.title)} | {_cell(f.detail)} |")
         out.append("")
 
-    out += _ioc_md(result)
+    if result.profile != "allgemein":
+        out += _ioc_md(result)
     out += ["---", "", "## Technischer Anhang", ""]
     out += _result_md(result, 3)
     return "\n".join(out)

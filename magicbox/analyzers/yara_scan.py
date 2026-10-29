@@ -60,6 +60,7 @@ def severity_for(match) -> str:
 
 class YaraAnalyzer(Analyzer):
     name = "yara"
+    malware_only = True
     kinds = ()  # alle Dateien
 
     def matches(self, ctx: Context, result: AnalysisResult) -> bool:

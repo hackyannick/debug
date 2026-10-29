@@ -77,7 +77,10 @@ def facts_text(result: AnalysisResult, budget: int, include_code: bool = True) -
         head.append("\n### Extrahierte Indikatoren (IOCs)")
         for kind, values in iocs.items():
             head.append(f"- {kind}: {', '.join(values)}")
-    if result.findings:
+    if result.findings and result.profile == "allgemein":
+        head.append("\n### Technische Hinweise")
+        head += [f"- {f.title}: {f.detail}" for f in result.findings]
+    elif result.findings:
         head.append("\n### Automatisch erkannte Auffälligkeiten")
         order = {"high": 0, "medium": 1, "low": 2, "info": 3}
         for f in sorted(result.findings, key=lambda f: order[f.severity]):
@@ -172,7 +175,8 @@ class Documenter:
             self.planned = self.calls + len(interesting[: self.s.max_llm_children]) + 1
             for child in interesting[: self.s.max_llm_children]:
                 facts = facts_text(child, int(budget * 0.8))
-                summary = self._ask(prompts.child_notes_prompt(child.name, facts), f"Teil-Analyse: {child.name}")
+                summary = self._ask(prompts.child_notes_prompt(child.name, facts, self.s.profile == "malware"),
+                                    f"Teil-Analyse: {child.name}")
                 child.llm_doc = summary
                 notes.append(f"### {child.name} ({child.description})\n{summary}")
             return "\n\n".join(notes)
@@ -188,7 +192,8 @@ class Documenter:
             chunks = chunks[: self.s.max_code_chunks]
         self.planned = self.calls + len(chunks) + 1
         for i, chunk in enumerate(chunks, 1):
-            summary = self._ask(prompts.code_notes_prompt(result.name, i, len(chunks), chunk, context),
+            summary = self._ask(prompts.code_notes_prompt(result.name, i, len(chunks), chunk, context,
+                                                          self.s.profile == "malware"),
                                 f"Code-Teil {i}/{len(chunks)} zusammenfassen")
             notes.append(f"### Code-Teil {i}\n{summary}")
         return "\n\n".join(notes)

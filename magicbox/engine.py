@@ -14,6 +14,9 @@ from magicbox.config import Settings
 from magicbox.model import AnalysisResult, Section, Table
 
 MAX_FILE_BYTES = 1024 * 1024 * 1024  # 1 GB – größere Dateien werden nur angelesen
+# Technische Hinweise, die auch im Software-Profil bleiben (als „info“) – alle anderen Befunde sind Sicherheitsbewertung
+TECHNICAL_NOTES = ("Archiv zu groß", "Entpackte Daten zu groß", "Passwortgeschützte", "UPX-Entpacken", "Limit erreicht",
+                   "Verschlüsseltes App-Store-Binary")
 SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv", "venv", ".idea", ".vs"}
 
 Log = Callable[[str], None]
@@ -31,6 +34,10 @@ class Engine:
         self._identify = IdentifyAnalyzer()
         self._count = 0
         self.shared: dict = {}
+        self.software = settings.profile == "allgemein"
+        if self.software:
+            skipped = ", ".join(a.name for a in ANALYZERS if a.malware_only)
+            self.log(f"Software-Profil: keine Malware-Prüfungen ({skipped} übersprungen)")
 
     def analyze_path(self, path: Path) -> AnalysisResult:
         path = Path(path)
@@ -52,7 +59,7 @@ class Engine:
         display = name if depth == 0 else f"{'  ' * depth}↳ {name}"
         self.log(f"Analysiere {display} ({len(data):,} Bytes)".replace(",", "."))
         path = path or Path(name)
-        result = AnalysisResult(path=str(path), name=name, size=len(data))
+        result = AnalysisResult(path=str(path), name=name, size=len(data), profile=self.settings.profile)
         ctx = Context(path=path, data=data, settings=self.settings, depth=depth, shared=self.shared)
         ctx.recurse = lambda child_name, child_data: self._child(child_name, child_data, depth + 1)
 
@@ -60,7 +67,7 @@ class Engine:
         for analyzer in ANALYZERS:
             if self.is_cancelled():
                 raise Cancelled()
-            if not analyzer.matches(ctx, result):
+            if (self.software and analyzer.malware_only) or not analyzer.matches(ctx, result):
                 continue
             hint = getattr(analyzer, "slow_hint", "")
             if hint:
@@ -77,8 +84,22 @@ class Engine:
                 self.log(f"  ! Fehler in {analyzer.name}: {exc}")
                 if os.environ.get("MAGICBOX_DEBUG"):
                     traceback.print_exc()
+        if self.software:
+            result.findings = self._software_findings(result.findings)
         self.log(f"  → {result.description}")
         return result
+
+    @staticmethod
+    def _software_findings(findings):
+        """Software-Profil: Sicherheitsbefunde verwerfen, technische Hinweise als „info“ behalten."""
+        kept = []
+        for f in findings:
+            if f.severity == "info":
+                kept.append(f)
+            elif f.title.startswith(TECHNICAL_NOTES):
+                f.severity = "info"
+                kept.append(f)
+        return kept
 
     def _child(self, name: str, data: bytes, depth: int) -> AnalysisResult | None:
         if self._count >= self.settings.max_archive_members * 2:
@@ -87,7 +108,7 @@ class Engine:
 
     def _analyze_dir(self, root: Path) -> AnalysisResult:
         result = AnalysisResult(path=str(root), name=root.name or str(root), size=0, kind="directory",
-                                description="Ordner")
+                                description="Ordner", profile=self.settings.profile)
         files: list[Path] = []
         for dirpath, dirnames, filenames in os.walk(root):
             dirnames[:] = sorted(d for d in dirnames if d not in SKIP_DIRS)

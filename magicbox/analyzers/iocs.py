@@ -92,6 +92,7 @@ def extract(text: str, aggressive: bool) -> dict[str, list[str]]:
 
 class IOCAnalyzer(Analyzer):
     name = "iocs"
+    malware_only = True
 
     def matches(self, ctx: Context, result: AnalysisResult) -> bool:
         return result.kind not in ("directory", "image", "zip", "tar", "gzip", "bzip2", "xz", "7z", "rar")

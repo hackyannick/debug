@@ -45,6 +45,7 @@ def _interesting(data: bytes) -> str | None:
 
 class DeobfuscationAnalyzer(Analyzer):
     name = "deobfuscate"
+    malware_only = True
     kinds = ()
 
     def matches(self, ctx: Context, result: AnalysisResult) -> bool:

@@ -67,6 +67,7 @@ class AnalysisResult:
     detections: list[str] = field(default_factory=list)
     llm_doc: str = ""
     llm_model: str = ""
+    profile: str = ""  # "malware" oder "allgemein" (Software-Doku ohne Malware-Prüfungen)
     # Eigene Fragen an die KI: {"question", "answer", "model", "time"}
     qa: list[dict] = field(default_factory=list)
 

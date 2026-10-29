@@ -313,7 +313,8 @@ namespace MagicBox.Desktop
             switch (status)
             {
                 case "done":
-                    c = risk == "hoch" ? Office.Bad : risk == "mittel" ? Color.FromArgb(230, 130, 0) : Color.FromArgb(40, 150, 40);
+                    c = risk == "hoch" ? Office.Bad : risk == "mittel" ? Color.FromArgb(230, 130, 0)
+                        : risk == "gering" ? Color.FromArgb(40, 150, 40) : Color.FromArgb(49, 106, 197); // Software-Doku: blau
                     glyph = "✓";
                     break;
                 case "error": c = Office.Bad; glyph = "!"; break;

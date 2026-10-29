@@ -35,7 +35,7 @@
           <label>Profil
             <select id="opt-profile">
               <option value="malware">🛡️ Malware</option>
-              <option value="allgemein">📘 Software</option>
+              <option value="allgemein" title="Reine Software-Dokumentation: ohne YARA, capa, IOCs und Risikobewertung">📘 Software</option>
             </select>
           </label>
           <label>Archiv-Passwort
@@ -160,7 +160,7 @@
           </select>
         </label>
         <label>Standard-Profil
-          <select name="profile"><option value="malware">Malware-Analyse</option><option value="allgemein">Software-Doku</option></select>
+          <select name="profile"><option value="malware">Malware-Analyse</option><option value="allgemein">Software-Doku (ohne Malware-Prüfungen)</option></select>
         </label>
         <label>Max. KI-Teilanalysen<input name="max_llm_children" type="number" min="0" max="100"></label>
       </div>

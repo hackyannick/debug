@@ -458,7 +458,7 @@ namespace MagicBox.Desktop
             }
             Label Caption(string text) => new Label { Text = text, AutoSize = true, BackColor = Color.Transparent, Margin = new Padding(0, Office.S(6), 0, Office.S(2)) };
 
-            profileBox.Items.AddRange(new object[] { "🛡 Malware-Analyse", "📘 Software-Doku" });
+            profileBox.Items.AddRange(new object[] { "🛡 Malware-Analyse", "📘 Software-Doku (ohne Malware-Prüfung)" });
             profileBox.SelectedIndex = cfg.Profile == "allgemein" ? 1 : 0;
             profileBox.SelectedIndexChanged += (s, e) => cfg.Profile = profileBox.SelectedIndex == 1 ? "allgemein" : "malware";
             questionBox.Height = Office.S(78);
@@ -818,7 +818,7 @@ namespace MagicBox.Desktop
             Chip(j.D.Str("profile") == "allgemein" ? "Software-Doku" : "Malware-Profil", "neutral");
             if (j.Status == "done")
             {
-                Chip($"Risiko {j.Risk}", j.Risk == "hoch" ? "bad" : j.Risk == "mittel" ? "warn" : "good");
+                if (j.Risk.Length > 0) Chip($"Risiko {j.Risk}", j.Risk == "hoch" ? "bad" : j.Risk == "mittel" ? "warn" : "good");
                 var verdict = j.D.Str("llm_verdict");
                 if (verdict.Length > 0)
                     Chip($"KI: {verdict}", verdict.Contains("bösartig") || verdict.Contains("gefährlich") ? "bad"

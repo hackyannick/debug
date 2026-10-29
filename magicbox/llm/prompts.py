@@ -5,12 +5,12 @@ from __future__ import annotations
 from magicbox.config import Settings
 
 DOC_HEADINGS = [
-    ("Kurzfassung", "3–5 Sätze: Was ist das, wofür ist es da, wie vertrauenswürdig wirkt es? Für Nicht-Experten."),
+    ("Kurzfassung", "3–5 Sätze: Was ist das, wofür ist es da, für wen ist es gedacht? Für Nicht-Experten."),
     ("Was ist das für eine Datei?", "Format, Plattform, Programmiersprache/Compiler, Herkunft (Hersteller, Version), sofern belegt."),
     ("Was macht sie?", "Die Funktionsweise Schritt für Schritt bzw. die Hauptfunktionen. Nutze Aufzählungen."),
     ("Aufbau & wichtige Komponenten", "Wichtige Funktionen/Klassen/Module/Dateien und ihr Zusammenspiel. Gern eine Tabelle."),
     ("Schnittstellen & Abhängigkeiten", "Bibliotheken, Netzwerk (Adressen, Protokolle), Dateien, Registry, Kommandozeilen-Parameter, Konfiguration."),
-    ("Sicherheitsbewertung", "Beginne mit einer Zeile 'Einstufung: unbedenklich | auffällig | gefährlich' und begründe sie mit Belegen."),
+    ("Technische Besonderheiten", "Verwendete Frameworks/Laufzeitumgebungen, Build-Details, Plattform-Eigenheiten."),
     ("Offene Fragen & Grenzen der Analyse", "Was ließ sich statisch nicht klären? Was wären sinnvolle nächste Schritte?"),
     ("Glossar", "Kurze, einfache Erklärungen der verwendeten Fachbegriffe (Tabelle: Begriff | Erklärung)."),
 ]
@@ -39,7 +39,9 @@ def headings(s: Settings) -> list[tuple[str, str]]:
 
 
 def system_prompt(s: Settings) -> str:
-    purpose = ""
+    purpose = ("Ziel ist eine Software-Dokumentation, keine Sicherheitsanalyse: Bewerte nicht, ob die Software "
+               "schädlich oder vertrauenswürdig ist, und vermute keine Schadfunktionen – beschreibe sachlich, was sie tut "
+               "und wie sie aufgebaut ist.\n")
     if s.profile == "malware":
         purpose = ("Die Analyse dient der Abwehr (Incident Response, Threat Intelligence, Schutz eigener Systeme). "
                    "Beschreibe das Verhalten sachlich und vollständig, gib aber keine Anleitungen zur Nutzung, "
@@ -55,23 +57,27 @@ def system_prompt(s: Settings) -> str:
     )
 
 
-def code_notes_prompt(name: str, part: int, total: int, code: str, context: str) -> str:
+def code_notes_prompt(name: str, part: int, total: int, code: str, context: str, security: bool = True) -> str:
+    focus = ("auffällige oder sicherheitsrelevante Stellen" if security
+             else "Besonderheiten der Implementierung (keine Sicherheitsbewertung)")
     return (
         f"Datei: {name}. Hier ist Teil {part} von {total} des extrahierten Codes (Quelltext, Pseudocode oder Disassembly).\n"
         f"Kontext zur Datei:\n{context}\n\n"
         f"```\n{code}\n```\n\n"
         "Fasse diesen Teil in höchstens 12 Stichpunkten zusammen: Zweck der enthaltenen Funktionen/Klassen, "
         "wichtige Abläufe und Datenflüsse, verwendete Schnittstellen (Netzwerk, Dateien, Prozesse, Krypto), "
-        "auffällige oder sicherheitsrelevante Stellen. Nenne Funktionsnamen. Keine Einleitung."
+        f"{focus}. Nenne Funktionsnamen. Keine Einleitung."
     )
 
 
-def child_notes_prompt(name: str, facts: str) -> str:
+def child_notes_prompt(name: str, facts: str, security: bool = True) -> str:
+    third = ("gibt es sicherheitsrelevante Auffälligkeiten (mit Beleg)?" if security
+             else "was ist technisch bemerkenswert?")
     return (
         f"Analyse-Fakten zur Datei „{name}“ (Teil eines Archivs, Ordners oder eine entpackte/dekodierte Stufe):\n\n"
         f"{facts}\n\n"
         "Beschreibe in 3–6 Stichpunkten: Was ist diese Datei, welche Rolle spielt sie vermutlich im Gesamtpaket, "
-        "gibt es sicherheitsrelevante Auffälligkeiten (mit Beleg)? Keine Einleitung."
+        f"{third} Keine Einleitung."
     )
 
 

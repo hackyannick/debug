@@ -187,9 +187,9 @@ function renderJob(fresh = false, switchTabs = fresh) {
   const chips = $("#job-chips");
   chips.replaceChildren();
   const chip = (cls, text) => chips.append(el("span", "chip " + cls, text));
-  chip("neutral", j.profile === "malware" ? "🛡️ Malware-Profil" : "📘 Software-Doku");
+  chip("neutral", j.profile === "malware" ? "🛡️ Malware-Profil" : "📘 Software-Doku (ohne Malware-Prüfung)");
   if (j.status === "done") {
-    chip(j.risk, `${RISK_ICON[j.risk] || ""} Risiko ${j.risk}`);
+    if (j.risk) chip(j.risk, `${RISK_ICON[j.risk] || ""} Risiko ${j.risk}`);
     if (j.llm_verdict) {
       const v = j.llm_verdict;
       chip(/bösartig|gefährlich/.test(v) ? "bad" : /verdächtig|auffällig/.test(v) ? "warn" : "good", `🤖 KI: ${v}`);

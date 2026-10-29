@@ -30,6 +30,7 @@ class Analyzer:
 
     name = "base"
     kinds: tuple[str, ...] = ()  # leer = alle
+    malware_only = False  # True: läuft nur im Malware-Profil (im Software-Profil übersprungen)
 
     def matches(self, ctx: Context, result: AnalysisResult) -> bool:
         return not self.kinds or result.kind in self.kinds

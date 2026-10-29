@@ -363,7 +363,10 @@ class JobManager:
             job.counts = counts
             job.detections = sorted({x for n in r.walk() for x in n.detections})
             job.ioc_count = sum(len(v) for n in r.walk() for v in n.iocs.values())
-            job.risk = "hoch" if counts["high"] or job.detections else "mittel" if counts["medium"] else "gering"
+            if settings.profile == "allgemein":
+                job.risk = ""  # Software-Doku: keine Risikobewertung
+            else:
+                job.risk = "hoch" if counts["high"] or job.detections else "mittel" if counts["medium"] else "gering"
             job.llm_error = outcome.llm_error
             job.model = r.llm_model
             job.qa_count = len(r.qa)
