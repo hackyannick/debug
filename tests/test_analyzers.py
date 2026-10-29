@@ -38,7 +38,7 @@ def test_strings_classification():
     strings = extract_strings(data)
     cats = classify(strings)
     assert any("evil.example.com" in s for s in cats["URL"])
-    assert cats["IP-Adresse"] == ["connect to 10.0.0.5:4444"]  # Versionsnummer wird nicht als IP gewertet
+    assert cats["IP-Adresse"] == ["10.0.0.5:4444"]  # nur der Wert; Versionsnummer wird nicht als IP gewertet
     assert any("Temp" in s for s in cats["Windows-Pfad"])
 
 

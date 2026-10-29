@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import datetime as dt
+from collections import Counter
 
 from magicbox.model import AnalysisResult, Section, Table
 
 from . import disasm
-from .apis import CAPABILITIES, categorize
+from .apis import CAPABILITIES, SECURITY_ONLY, categorize
 from .base import Analyzer, Context, clip, entropy
+from .libs import describe, library_of
 
 try:
     import pefile
@@ -72,9 +74,12 @@ class PEAnalyzer(Analyzer):
             name for flag, name in ((0x40, "ASLR"), (0x100, "DEP/NX"), (0x4000, "CFG"), (0x400, "kein SEH"))
             if dll_chars & flag) or "keine"
         if hasattr(pe, "DIRECTORY_ENTRY_TLS") and pe.DIRECTORY_ENTRY_TLS.struct.AddressOfCallBacks:
-            kv["TLS-Callbacks"] = "ja (Code läuft vor dem Einstiegspunkt)"
-            result.find("low", "TLS-Callbacks", "Code wird bereits vor main/WinMain ausgeführt – manchmal Anti-Debug-Trick.")
+            kv["TLS-Callbacks"] = "ja – Thread-Local-Storage-Callbacks (nicht TLS/SSL): Code läuft vor dem Einstiegspunkt"
+            result.find("low", "TLS-Callbacks", "Thread-Local-Storage-Callbacks: Code wird bereits vor main/WinMain "
+                        "ausgeführt – üblich in großen C++-Programmen, manchmal Anti-Debug-Trick.")
         result.add(Section("PE-Header", kv=kv, llm_priority=0))
+        if oh.DATA_DIRECTORY[4].Size:
+            result.product["Digitale Signatur"] = "vorhanden (Authenticode, Gültigkeit nicht geprüft)"
 
         self._version_info(pe, result)
         self._sections(pe, result)
@@ -95,6 +100,11 @@ class PEAnalyzer(Analyzer):
                             info[key] = clip(val, 200)
         if info:
             result.add(Section("Versionsinformationen (Ressource)", kv=info, llm_priority=0))
+            for key, label in (("ProductName", "Produkt"), ("FileDescription", "Beschreibung"),
+                               ("CompanyName", "Hersteller"), ("ProductVersion", "Version"),
+                               ("FileVersion", "Dateiversion"), ("OriginalFilename", "Originaler Dateiname")):
+                if info.get(key) and info[key] not in result.product.values():
+                    result.product[label] = info[key]
 
     def _sections(self, pe, result: AnalysisResult) -> None:
         rows = []
@@ -144,13 +154,24 @@ class PEAnalyzer(Analyzer):
         exports: dict[int, str] = {}
         if not hasattr(pe, "DIRECTORY_ENTRY_EXPORT"):
             return exports
-        rows = []
+        own_rows, lib_counts = [], Counter()
         for sym in pe.DIRECTORY_ENTRY_EXPORT.symbols:
             name = sym.name.decode(errors="replace") if sym.name else f"#{sym.ordinal}"
+            lib = library_of(name)
+            if lib:
+                lib_counts[lib] += 1
+                continue
             exports[sym.address] = name
-            rows.append([str(sym.ordinal), name, hex(sym.address)])
-        result.add(Section("Exportierte Funktionen (API der DLL)",
-                           table=Table(["Ordinal", "Name", "RVA"], rows[:300], total=len(rows)), llm_priority=1))
+            own_rows.append([str(sym.ordinal), name, hex(sym.address)])
+        total = len(own_rows) + sum(lib_counts.values())
+        text = ""
+        if lib_counts:
+            text = (f"{total} Exporte, davon {sum(lib_counts.values())} aus bekannten Bibliotheken "
+                    f"({describe(lib_counts)}) – z. B. die Node.js/V8-Schnittstelle für native Module; "
+                    "aufgeführt sind nur die übrigen.")
+        result.add(Section("Exportierte Funktionen (API der DLL)", text=text,
+                           table=Table(["Ordinal", "Name", "RVA"], own_rows[:300], total=len(own_rows)) if own_rows else None,
+                           llm_priority=1))
         return exports
 
     def _resources(self, pe, result: AnalysisResult) -> None:
@@ -173,7 +194,7 @@ class PEAnalyzer(Analyzer):
 
     def _code(self, pe, ctx: Context, result: AnalysisResult, arch: str | None,
               iat: dict[int, str], exports: dict[int, str]) -> None:
-        if not disasm.available(arch) or ctx.facts.get("dotnet"):
+        if not disasm.available(arch) or ctx.facts.get("dotnet") or ctx.facts.get("runtime_shell"):
             return  # .NET: Einstiegspunkt ist nur ein Sprung in die CLR – C# kommt vom .NET-Analyzer
         base = pe.OPTIONAL_HEADER.ImageBase
         names = dict(iat)
@@ -201,6 +222,8 @@ class PEAnalyzer(Analyzer):
 
 def add_capabilities(result: AnalysisResult, functions: list[str]) -> None:
     caps = categorize(functions)
+    if result.profile == "allgemein":  # Software-Doku: nur Funktionsbereiche, keine Sicherheitsbewertung
+        caps = {c: f for c, f in caps.items() if c not in SECURITY_ONLY}
     if not caps:
         return
     rows = []

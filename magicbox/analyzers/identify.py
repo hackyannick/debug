@@ -70,6 +70,8 @@ def detect(data: bytes, name: str) -> tuple[str, str]:
         return "dex", "Android DEX (Dalvik Bytecode)"
     if head[:4] == b"\0asm":
         return "wasm", "WebAssembly-Modul"
+    if head[:4] == b"\x04\x00\x00\x00" and head[16:24] == b'{"files"':
+        return "asar", "Electron-App-Archiv (ASAR)"
     if head[:4] == b"PK\x03\x04" or head[:4] == b"PK\x05\x06":
         return "zip", "ZIP-Archiv"
     if head[:2] == b"\x1f\x8b":

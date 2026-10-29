@@ -7,6 +7,7 @@ import re
 import time
 from typing import Callable
 
+from magicbox.analyzers.runtime import is_shell
 from magicbox.config import Settings
 from magicbox.model import AnalysisResult, Section
 
@@ -67,6 +68,11 @@ def collect_iocs(result: AnalysisResult, per_kind: int = 15) -> dict[str, list[s
 def facts_text(result: AnalysisResult, budget: int, include_code: bool = True) -> str:
     """Kompakte Faktenbasis innerhalb eines Zeichenbudgets (wichtigste Abschnitte zuerst)."""
     head = [f"- Datei: {result.name}", f"- Typ: {result.description}", f"- Größe: {result.size} Bytes"]
+    if result.product:  # belegte Angaben zur Identität (Versionsinfo/package.json) – das Modell soll nicht raten
+        head.append("- Produkt laut Datei: " + " · ".join(f"{k}: {v}" for k, v in result.product.items()))
+    if result.runtime:
+        hint = next((s.kv.get("Wo liegt die Programmlogik?", "") for s in result.sections if s.title == "Laufzeitumgebung"), "")
+        head.append(f"- Laufzeitumgebung: {result.runtime}" + (f" – {hint}" if hint else ""))
     if result.hashes:
         head.append(f"- SHA-256: {result.hashes.get('sha256', '')}")
     detections = sorted({d for r in result.walk() for d in r.detections})
@@ -160,6 +166,7 @@ class Documenter:
         include_code = not notes  # Code wurde bereits in Notizen verdichtet
         facts = facts_text(result, facts_budget, include_code=include_code)
         doc = self._ask(prompts.document_prompt(result.name, facts, notes, self.s), "Dokumentation schreiben")
+        doc += verification_note(result, doc)
         result.llm_doc = doc
         result.llm_model = self.s.model
         return doc
@@ -169,9 +176,17 @@ class Documenter:
         """Verdichtet Code und Kind-Dateien, falls sie nicht direkt in den Kontext passen."""
         notes: list[str] = []
         if result.children:
-            interesting = [c for c in result.children if c.kind not in BORING_KINDS or c.findings]
-            interesting.sort(key=lambda c: (-len([f for f in c.findings if f.severity in ("high", "medium")]),
-                                            c.kind in ("source",), -c.size))
+            # Code aus Electron-Archiven (app.asar) liegt oft tiefer, z. B. Installer → Paket → app.asar → *.js
+            candidates = list(result.children) + [g for node in result.walk() if node is not result and
+                                                  node.kind == "asar" for g in node.children]
+            interesting = [c for c in candidates if (c.kind not in BORING_KINDS or c.findings)]
+            software = self.s.profile == "allgemein"
+
+            def rank(c: AnalysisResult) -> tuple:
+                serious = len([f for f in c.findings if f.severity in ("high", "medium")])
+                code_first = c.kind == "source" if software else c.kind != "source"
+                return (-serious, is_shell(c), c.kind != "asar", not code_first, -c.size)
+            interesting.sort(key=rank)
             self.planned = self.calls + len(interesting[: self.s.max_llm_children]) + 1
             for child in interesting[: self.s.max_llm_children]:
                 facts = facts_text(child, int(budget * 0.8))
@@ -223,8 +238,30 @@ class Documenter:
         code = "\n\n".join(f"### {label}\n```{lang}\n{text.strip()}\n```" for label, lang, text in units)
         reply = self._ask(prompts.question_prompt(result.name, facts, code, partial, question, self.s),
                           "Frage beantworten")
+        reply += verification_note(result, reply)
         result.qa.append({"question": question, "answer": reply, "model": self.s.model, "time": time.time()})
         return reply
+
+
+DLL_RE = re.compile(r"\b[\w.-]+\.(?:dll|sys|drv|ocx)\b", re.I)
+
+
+def verification_note(result: AnalysisResult, text: str) -> str:
+    """Gegenprüfung: Im KI-Text genannte DLLs müssen in den Analysedaten vorkommen – sonst Hinweis anhängen."""
+    mentioned = {m.group().lower() for m in DLL_RE.finditer(text)}
+    if not mentioned:
+        return ""
+    import json
+
+    def facts_only(d: dict) -> dict:  # KI-Texte (Teil-Analysen, frühere Antworten) zählen nicht als Beleg
+        return {k: ([facts_only(c) for c in v] if k == "children" else v) for k, v in d.items()
+                if k not in ("llm_doc", "qa", "llm_model")}
+    known = json.dumps(facts_only(result.to_dict()), ensure_ascii=False).lower()
+    unknown = sorted(d for d in mentioned if d not in known)
+    if not unknown:
+        return ""
+    return ("\n\n> ⚠️ **Gegenprüfung der Magic Box:** " + ", ".join(f"`{d}`" for d in unknown) +
+            " kommt in den Analysedaten nicht vor – diese Angabe der KI ist vermutlich falsch.")
 
 
 def code_units(result: AnalysisResult, size: int = 2400) -> list[tuple[str, str, str]]:

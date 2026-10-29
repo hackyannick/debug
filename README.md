@@ -32,6 +32,9 @@ die dein Netzwerk verlassen.
 | **Windows PE** (EXE/DLL/SYS) | Header, Compile-Zeit, Schutzmechanismen, Signatur, Versions-Infos, Sektionen + Entropie, Imports/Exports, Ressourcen, Packer, Disassembly bzw. radare2-Pseudocode |
 | **.NET** | Klassen, Methoden, **String-Literale** (oft die Malware-Konfiguration: C2, Keys), aufgerufene APIs, Obfuskations-Erkennung, **Dekompilierung nach C#** (ILSpy) |
 | **UPX-gepackt** | Wird automatisch entpackt, die entpackte Datei wird zusätzlich analysiert |
+| **Electron-Apps** (`app.asar`) | Die eigentliche Programmlogik (JavaScript/HTML): App-Steckbrief aus `package.json`, eigene Dateien einzeln, npm-Pakete mit Version. Eine Electron-`.exe` allein ist nur die Laufzeit – die Magic Box sagt das und überspringt die (sinnlose) Disassembly |
+| **Installer** | Squirrel (`.nupkg` in Setup.exe), angehängte ZIP/7z-Archive (auch bei signierten Installern), NSIS/electron-builder (über 7-Zip) werden ausgepackt; Inno Setup wird erkannt (Hinweis auf innoextract) |
+| **Laufzeitumgebungen** | Electron, CEF, NW.js, PyInstaller, Go, Rust, Qt, Delphi, AutoIt, Node-Einzeldateien – mit Hinweis, wo die Programmlogik liegt; Funktionen/Exporte bekannter Bibliotheken (V8, Node.js, Chromium, OpenSSL, FFmpeg …) werden ausgefiltert |
 | **Linux ELF / macOS Mach-O** | Architektur, Libs, Härtung, Symbole, Disassembly/Pseudocode mit aufgelösten Aufrufen |
 | **Archive** ZIP, 7z, RAR, TAR, GZ, XZ, BZ2 | Rekursiv; **Passwort-Archive** (`infected` & Co., auch AES) werden automatisch geöffnet; Schutz vor ZIP-Bomben |
 | **Office** (DOC/XLS/DOCM/XLSM …) | **VBA-/XLM-Makros** extrahieren (olevba), AutoOpen & verdächtige Funktionen bewerten |
@@ -55,6 +58,12 @@ die dein Netzwerk verlassen.
 Beim Hochladen (Feld *Frage an die KI*) oder später zu jedem fertigen Auftrag kannst du frei fragen, z. B.
 „Suche die Funktion, die die Verbindung zum Server aufbaut, und erkläre sie verständlich.“
 Die Antworten stehen oben im Bericht unter *Deine Fragen an die KI* (neueste zuerst).
+
+**Tipp für Electron-Programme** (Discord, Slack, Qobuz, VS Code …): nicht die `.exe` hochladen, sondern
+`resources\app.asar`, den Installer oder den Programmordner als ZIP – sonst dokumentiert die KI nur Electron.
+
+**Gegenprüfung:** Nennt die KI DLLs, die in den Analysedaten nicht vorkommen, hängt die Magic Box einen
+sichtbaren Hinweis an den Text an.
 
 Passt der extrahierte Code nicht komplett in den Kontext des Modells, leitet die KI zuerst Suchbegriffe aus der
 Frage ab (z. B. `socket, connect, InternetOpen`); per Stichwortsuche werden dann die passendsten Funktionen,

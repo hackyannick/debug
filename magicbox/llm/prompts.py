@@ -53,7 +53,16 @@ def system_prompt(s: Settings) -> str:
         "1. Stütze dich ausschließlich auf die gelieferten Fakten. Erfinde keine Funktionen, Namen oder Zahlen.\n"
         "2. Kennzeichne Schlussfolgerungen deutlich mit „vermutlich“ oder „deutet darauf hin“.\n"
         f"3. Schreibe {s.audience}. Erkläre Fachbegriffe beim ersten Auftreten kurz.\n"
-        f"4. Antworte ausschließlich auf {s.language}, in sauberem Markdown, ohne Einleitungsfloskeln."
+        f"4. Antworte ausschließlich auf {s.language}, in sauberem Markdown, ohne Einleitungsfloskeln.\n"
+        "5. Steht unter „Produkt laut Datei“ ein Name, Hersteller oder eine Version, übernimm genau diese Angaben "
+        "und rate keine anderen Produkte.\n"
+        "6. Nenne nur DLLs, Bibliotheken, Funktionen und Adressen, die wörtlich in den Fakten stehen.\n"
+        "7. IP-Adressen und URLs aus Zeichenketten belegen keine Verbindung – oft stammen sie aus eingebauten "
+        "Bibliotheken (z. B. DNS-Anbieterlisten von Browsern).\n"
+        "8. „TLS-Callbacks“ bedeutet Thread Local Storage, nicht TLS/SSL-Verschlüsselung.\n"
+        "9. Funktionen bekannter Laufzeitumgebungen und Bibliotheken (V8, Node.js, Chromium, OpenSSL, Qt …) gehören "
+        "nicht zur eigentlichen Programmlogik – beschreibe sie nur als verwendete Technik. Ist eine "
+        "Laufzeitumgebung genannt, erkläre, wo die eigentliche Programmlogik liegt."
     )
 
 

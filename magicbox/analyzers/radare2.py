@@ -16,10 +16,20 @@ import tempfile
 from magicbox.model import AnalysisResult, Section, Table
 
 from .base import Analyzer, Context, clip
+from .libs import describe, library_of
 
 SEP = "---MAGICBOX-FN---"
 BORING = ("sym.imp.", "loc.imp.", "sym._init", "sym._fini", "sym.deregister_tm_clones", "sym.register_tm_clones",
           "sym.__do_global_dtors_aux", "sym.frame_dummy", "sym.__libc_csu", "sym._start", "entry.init", "entry.fini")
+
+
+def _real_size(f: dict) -> int:
+    size = f.get("realsz")
+    if not isinstance(size, int) or size <= 0:
+        size = f.get("size", 0) if isinstance(f.get("size"), int) else 0
+        if size > 1024 * 1024:  # unplausibel für eine einzelne Funktion
+            size = 0
+    return size
 
 
 def find_r2(configured: str) -> str | None:
@@ -41,6 +51,8 @@ class Radare2Analyzer(Analyzer):
     kinds = ("pe", "elf", "macho")
 
     def matches(self, ctx: Context, result: AnalysisResult) -> bool:
+        if ctx.facts.get("runtime_shell"):  # z. B. Electron: Code wäre nur die Laufzeit, nicht das Programm
+            return False
         return super().matches(ctx, result) and ctx.settings.use_radare2 and find_r2(ctx.settings.radare2_path) is not None
 
     def analyze(self, ctx: Context, result: AnalysisResult) -> None:
@@ -63,15 +75,31 @@ class Radare2Analyzer(Analyzer):
             ctx.facts["radare2"] = True
 
             # radare2 ≥ 6 nennt die Adresse "addr", ältere Versionen "offset"
-            funcs = [{**f, "addr": f.get("addr", f.get("offset"))} for f in funcs
+            # "size" ist bei radare2 die Spanne vom ersten bis zum letzten Block (bei großen Binaries teils
+            # zig MB); "realsz" ist die tatsächliche Codegröße
+            funcs = [{**f, "addr": f.get("addr", f.get("offset")), "realsz": _real_size(f)} for f in funcs
                      if isinstance(f, dict) and isinstance(f.get("addr", f.get("offset")), int)]
-            own = [f for f in funcs if not f.get("name", "").startswith(BORING)]
-            rows = [[f["name"], hex(f["addr"]), str(f.get("size", 0)), str(f.get("nbbs", "")),
+            libs: dict[str, int] = {}
+            own = []
+            for f in funcs:
+                if f.get("name", "").startswith(BORING):
+                    continue
+                lib = library_of(f.get("name", ""))
+                if lib:
+                    libs[lib] = libs.get(lib, 0) + 1
+                else:
+                    own.append(f)
+            rows = [[f["name"], hex(f["addr"]), str(f["realsz"]), str(f.get("nbbs", "")),
                      str(len(f.get("callrefs", []) or []))]
-                    for f in sorted(own, key=lambda f: -f.get("size", 0))[:300]]
-            result.add(Section(f"Funktionen (radare2, {len(funcs)} erkannt, {len(own)} eigene)",
-                               table=Table(["Name", "Adresse", "Größe", "Blöcke", "Aufrufe"], rows, total=len(own)),
-                               llm_priority=2))
+                    for f in sorted(own, key=lambda f: -f["realsz"])[:300]]
+            text = ""
+            if libs:
+                from collections import Counter
+                text = (f"Ohne {sum(libs.values())} Funktionen bekannter Bibliotheken ({describe(Counter(libs))}) – "
+                        "diese gehören nicht zur eigentlichen Programmlogik.")
+            result.add(Section(f"Funktionen (radare2, {len(funcs)} erkannt, {len(own)} eigene bzw. unbenannte)",
+                               table=Table(["Name", "Adresse", "Größe (Bytes)", "Blöcke", "Aufrufe"], rows,
+                                           total=len(own)), text=text, llm_priority=2))
 
             targets = self._pick(own, ctx.settings.max_disasm_functions)
             cmds = [level] + [f"?e {SEP}{f['name']}@{f['addr']:#x};pdc @ {f['addr']}" for f in targets]
@@ -99,5 +127,5 @@ class Radare2Analyzer(Analyzer):
         by_name = {f["name"]: f for f in funcs}
         picked = [by_name[n] for n in ("main", "sym.main", "entry0", "sym.WinMain", "sym._main", "sym.DllMain")
                   if n in by_name]
-        rest = sorted((f for f in funcs if f not in picked), key=lambda f: -f.get("size", 0))
+        rest = sorted((f for f in funcs if f not in picked), key=lambda f: -f.get("realsz", 0))
         return (picked + rest)[:limit]

@@ -121,9 +121,16 @@ def _ioc_md(result: AnalysisResult) -> list[str]:
 def rule_based_summary(result: AnalysisResult) -> str:
     """Kurzfassung ohne KI – aus den Fakten abgeleitet."""
     lines = [f"**{result.name}** ist ein(e) **{result.description}** mit {human_size(result.size)}."]
+    if result.product:
+        lines.append(" · ".join(f"{k}: **{v}**" if k == "Produkt" else f"{k}: {v}"
+                                for k, v in result.product.items()))
+    if result.runtime:
+        rt = next((s.kv for s in result.sections if s.title == "Laufzeitumgebung"), {})
+        lines.append(f"Laufzeitumgebung: **{result.runtime}** – {rt.get('Wo liegt die Programmlogik?', '')}".rstrip(" –"))
     caps = [s for s in result.sections if s.title.startswith("Abgeleitete Fähigkeiten")]
     if caps and caps[0].table:
-        lines.append("Erkennbare Fähigkeiten: " + ", ".join(r[0] for r in caps[0].table.rows) + ".")
+        label = "Erkennbare Funktionsbereiche" if result.profile == "allgemein" else "Erkennbare Fähigkeiten"
+        lines.append(f"{label}: " + ", ".join(r[0] for r in caps[0].table.rows) + ".")
     if result.children:
         kinds: dict[str, int] = {}
         for c in result.walk():

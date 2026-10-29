@@ -68,6 +68,9 @@ class AnalysisResult:
     llm_doc: str = ""
     llm_model: str = ""
     profile: str = ""  # "malware" oder "allgemein" (Software-Doku ohne Malware-Prüfungen)
+    # Wer/was ist das? z. B. {"Produkt": "Qobuz", "Version": "8.3.0", "Hersteller": "Qobuz"} (Versionsinfo, package.json …)
+    product: dict[str, str] = field(default_factory=dict)
+    runtime: str = ""  # erkannte Laufzeitumgebung, z. B. "Electron 34.2.0"
     # Eigene Fragen an die KI: {"question", "answer", "model", "time"}
     qa: list[dict] = field(default_factory=list)
 
