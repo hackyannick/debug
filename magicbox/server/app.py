@@ -358,7 +358,11 @@ class MagicBoxServer:
                                 return self._error(409, str(exc))
                             return self._json({"ok": True})
                         job = m.get(job_id)
-                        return self._json({**job.public(), "log": m.log_lines(job_id), "ai": m.ai_text(job_id)})
+                        # Stand von Protokoll/KI-Text vor dem Job-Stand lesen: so ist nichts davon jünger
+                        log_total = m.log_count.get(job_id)
+                        log, ai = m.log_lines(job_id), m.ai_text(job_id)
+                        return self._json({**m.get(job_id).public(), "log": log, "ai": ai,
+                                           "log_total": len(log) if log_total is None else log_total})
                     action = parts[2]
                     if action == "cancel" and method == "POST":
                         m.cancel(job_id)

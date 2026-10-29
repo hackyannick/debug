@@ -45,7 +45,12 @@ def run(path: Path, settings: Settings, cb: Callbacks | None = None, report_fold
         cb.progress(45, "KI schreibt Dokumentation")
         cb.log(f"▶ Sende Fakten an {settings.provider} @ {settings.base_url} (Modell {settings.model})")
         try:
-            doc = Documenter(settings, log=cb.log, on_token=cb.token, is_cancelled=cb.is_cancelled)
+            def llm_step(done: int, total: int, label: str) -> None:
+                stage = f"KI · Schritt {done + 1} von {total}: {label}" if total > 1 else f"KI · {label}"
+                cb.progress(45 + int(50 * done / total), stage)
+
+            doc = Documenter(settings, log=cb.log, on_token=cb.token, is_cancelled=cb.is_cancelled,
+                             on_progress=llm_step)
             doc.document(result)
             cb.log(f"✔ KI-Dokumentation fertig ({doc.calls} Anfrage(n))")
         except LLMCancelled as exc:

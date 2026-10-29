@@ -109,14 +109,19 @@ def split_chunks(text: str, size: int) -> list[str]:
 
 class Documenter:
     def __init__(self, settings: Settings, log: Log | None = None, on_token: Callable[[str], None] | None = None,
-                 is_cancelled: Callable[[], bool] | None = None):
+                 is_cancelled: Callable[[], bool] | None = None,
+                 on_progress: Callable[[int, int, str], None] | None = None):
         self.s = settings
         self.log = log or (lambda m: None)
         self.on_token = on_token
+        self.on_progress = on_progress  # (erledigte Schritte, geplante Schritte, Bezeichnung)
         self.client = LLMClient(settings, is_cancelled=is_cancelled)
         self.calls = 0
+        self.planned = 1  # wird präzisiert, sobald feststeht, wie viele Teilanalysen nötig sind
 
     def _ask(self, user: str, label: str) -> str:
+        if self.on_progress:
+            self.on_progress(self.calls, max(self.planned, self.calls + 1), label)
         self.calls += 1
         self.log(f"LLM: {label} …")
         if self.on_token:
@@ -132,7 +137,7 @@ class Documenter:
         facts_budget = budget - min(len(notes), budget // 2)
         include_code = not notes  # Code wurde bereits in Notizen verdichtet
         facts = facts_text(result, facts_budget, include_code=include_code)
-        doc = self._ask(prompts.document_prompt(result.name, facts, notes, self.s), f"Dokumentation für {result.name}")
+        doc = self._ask(prompts.document_prompt(result.name, facts, notes, self.s), "Dokumentation schreiben")
         result.llm_doc = doc
         result.llm_model = self.s.model
         return doc
@@ -145,9 +150,10 @@ class Documenter:
             interesting = [c for c in result.children if c.kind not in BORING_KINDS or c.findings]
             interesting.sort(key=lambda c: (-len([f for f in c.findings if f.severity in ("high", "medium")]),
                                             c.kind in ("source",), -c.size))
+            self.planned = len(interesting[: self.s.max_llm_children]) + 1
             for child in interesting[: self.s.max_llm_children]:
                 facts = facts_text(child, int(budget * 0.8))
-                summary = self._ask(prompts.child_notes_prompt(child.name, facts), f"Teil-Analyse {child.name}")
+                summary = self._ask(prompts.child_notes_prompt(child.name, facts), f"Teil-Analyse: {child.name}")
                 child.llm_doc = summary
                 notes.append(f"### {child.name} ({child.description})\n{summary}")
             return "\n\n".join(notes)
@@ -161,8 +167,9 @@ class Documenter:
         if len(chunks) > self.s.max_code_chunks:
             self.log(f"Code hat {len(chunks)} Teile – nur die ersten {self.s.max_code_chunks} werden einzeln gelesen.")
             chunks = chunks[: self.s.max_code_chunks]
+        self.planned = len(chunks) + 1
         for i, chunk in enumerate(chunks, 1):
             summary = self._ask(prompts.code_notes_prompt(result.name, i, len(chunks), chunk, context),
-                                f"Code-Teil {i}/{len(chunks)}")
+                                f"Code-Teil {i}/{len(chunks)} zusammenfassen")
             notes.append(f"### Code-Teil {i}\n{summary}")
         return "\n\n".join(notes)

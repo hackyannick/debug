@@ -78,7 +78,10 @@
           <button class="btn ghost danger-text" id="act-delete" title="Auftrag inkl. Probe löschen">🗑</button>
         </div>
       </div>
-      <div class="progress hidden" id="job-progress"><div class="bar" id="job-bar"></div><span id="job-stage"></span></div>
+      <div class="progress hidden" id="job-progress">
+        <div class="track" id="job-track"><div class="bar" id="job-bar"></div></div>
+        <span class="pct" id="job-pct"></span><span class="stage" id="job-stage"></span>
+      </div>
       <nav class="tabs" role="tablist">
         <button class="tab active" data-tab="report">📖 Bericht</button>
         <button class="tab" data-tab="ai">🤖 KI live</button>
@@ -89,7 +92,10 @@
           <iframe id="report-frame" sandbox title="Bericht"></iframe>
           <div class="placeholder hidden" id="report-placeholder"></div>
         </div>
-        <div class="panel" data-panel="ai"><pre id="ai-text" class="mono"></pre></div>
+        <div class="panel" data-panel="ai">
+          <div class="ai-wait hidden" id="ai-wait"><span class="spinner"></span><span id="ai-wait-text"></span></div>
+          <pre id="ai-text" class="mono"></pre>
+        </div>
         <div class="panel" data-panel="log"><pre id="log-text" class="mono"></pre></div>
       </div>
     </section>

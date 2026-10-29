@@ -2,7 +2,8 @@
 "use strict";
 
 const $ = (sel) => document.querySelector(sel);
-const state = { jobs: new Map(), current: null, status: null, ai: "", log: [] };
+const state = { jobs: new Map(), current: null, status: null, ai: "", aiLen: 0, log: [], logTotal: 0, loading: false };
+const cpLen = (t) => [...t].length;  // Länge in Unicode-Zeichen – so zählt auch der Server
 
 const STATUS = {
   queued: ["⏳", "wartet"], running: ["⚙️", "läuft"], done: ["✅", "fertig"],
@@ -104,7 +105,9 @@ function renderTools(list) {
 
 // ------------------------------------------------------------------ Aufträge
 function upsertJob(job) {
-  state.jobs.set(job.id, { ...(state.jobs.get(job.id) || {}), ...job });
+  const old = state.jobs.get(job.id);
+  if (old && (job.rev ?? 0) < (old.rev ?? 0)) return;  // veralteter Stand (z. B. späte Antwort) – verwerfen
+  state.jobs.set(job.id, { ...(old || {}), ...job });
   renderJobs();
   if (state.current === job.id) renderJob();
 }
@@ -135,22 +138,28 @@ function renderJobs() {
   }
 }
 
-async function selectJob(id) {
+async function selectJob(id, switchTabs = true) {
   state.current = id;
   location.hash = id;
+  state.loading = true;  // Live-Ereignisse bis zur Antwort ignorieren – Lücken werden danach erkannt
   renderJobs();
   try {
     const detail = await api(`/api/jobs/${id}`);
+    if (state.current !== id) return;  // inzwischen anderer Auftrag gewählt
     state.ai = detail.ai || "";
+    state.aiLen = cpLen(state.ai);
     state.log = detail.log || [];
+    state.logTotal = detail.log_total ?? state.log.length;
     upsertJob(detail);
   } catch (e) {
     toast(e.message, true);
+  } finally {
+    if (state.current === id) state.loading = false;
   }
-  renderJob(true);
+  renderJob(true, switchTabs);
 }
 
-function renderJob(fresh = false) {
+function renderJob(fresh = false, switchTabs = fresh) {
   const j = state.jobs.get(state.current);
   $("#empty").classList.toggle("hidden", !!j);
   $("#job").classList.toggle("hidden", !j);
@@ -198,8 +207,11 @@ function renderJob(fresh = false) {
 
   const running = j.status === "running" || j.status === "queued";
   $("#job-progress").classList.toggle("hidden", !running);
-  $("#job-bar").style.width = `${Math.max(2, j.progress || 0) * 0.6}%`;
-  $("#job-stage").textContent = `${j.progress || 0} % · ${j.stage || ""}`;
+  $("#job-bar").style.width = `${Math.max(3, j.progress || 0)}%`;
+  $("#job-track").classList.toggle("busy", j.status === "running");
+  $("#job-pct").textContent = `${j.progress || 0} %`;
+  $("#job-stage").textContent = j.status === "queued" ? "wartet auf einen freien Platz" : j.stage || "";
+  updateAiWait();
 
   const frame = $("#report-frame");
   const ph = $("#report-placeholder");
@@ -219,10 +231,10 @@ function renderJob(fresh = false) {
       : running ? "⏳ Analyse läuft … im Tab „KI live“ kannst du zusehen." : "";
   }
   if (fresh) {
-    $("#ai-text").textContent = state.ai || "(noch keine KI-Ausgabe)";
+    $("#ai-text").textContent = state.ai || (running ? "" : "(keine KI-Ausgabe)");
     $("#log-text").textContent = state.log.join("\n");
-    if (running && j.status === "running") switchTab("ai");
-    else if (done) switchTab("report");
+    if (switchTabs && running && j.status === "running") switchTab("ai");
+    else if (switchTabs && done) switchTab("report");
   }
 }
 
@@ -231,9 +243,25 @@ function switchTab(name) {
   document.querySelectorAll(".panel").forEach((p) => p.classList.toggle("active", p.dataset.panel === name));
 }
 
+// Hinweis im KI-Tab, solange das Modell (noch) nichts schreibt – z. B. beim ersten Laden in den Speicher
+function updateAiWait() {
+  const j = state.jobs.get(state.current);
+  const box = $("#ai-wait");
+  const llmPhase = j && j.status === "running" && /^KI/.test(j.stage || "");
+  const idle = (Date.now() - (state.lastTokenAt || 0)) / 1000;
+  if (!llmPhase || idle < 4) { box.classList.add("hidden"); return; }
+  const since = Math.round(Math.min(idle, (Date.now() - (state.llmSince || Date.now())) / 1000));
+  $("#ai-wait-text").textContent = since < 20
+    ? "Das Sprachmodell liest die Analyse-Fakten ein …"
+    : `Warte auf das Sprachmodell (seit ${since} s) – beim ersten Aufruf lädt Ollama das Modell in den Speicher, ` +
+      "bei großen Modellen und langen Eingaben dauert das auf CPU 1–3 Minuten.";
+  box.classList.remove("hidden");
+}
+setInterval(updateAiWait, 1000);
+
 function appendTo(pre, text) {
   const atBottom = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 30;
-  if (pre.textContent.startsWith("(noch keine")) pre.textContent = "";
+  if (pre.textContent.startsWith("(keine KI-Ausgabe)")) pre.textContent = "";
   pre.append(text);
   if (atBottom) pre.scrollTop = pre.scrollHeight;
 }
@@ -298,15 +326,34 @@ function connectEvents() {
     const ev = JSON.parse(msg.data);
     if (ev.type === "job") {
       const before = state.jobs.get(ev.job.id);
+      if (ev.job.id === state.current && /^KI/.test(ev.job.stage || "") && !/^KI/.test(before?.stage || "")) {
+        state.llmSince = Date.now();
+      }
       upsertJob(ev.job);
       if (before && before.status !== ev.job.status && ev.job.id === state.current) {
-        if (ev.job.status === "running") { state.ai = ""; $("#ai-text").textContent = ""; $("#log-text").textContent = ""; switchTab("ai"); }
+        if (ev.job.status === "running") {
+          state.ai = ""; state.aiLen = 0; state.log = []; state.logTotal = 0;
+          $("#ai-text").textContent = ""; $("#log-text").textContent = ""; switchTab("ai");
+        }
         if (ev.job.status === "done") switchTab("report");
       }
       if (before?.status === "running" && ev.job.status === "done") toast(`✅ ${ev.job.name} ist fertig`);
-    } else if (ev.type === "token" && ev.id === state.current) {
-      appendTo($("#ai-text"), ev.text);
-    } else if (ev.type === "log" && ev.id === state.current) {
+    } else if (ev.type === "token" && ev.id === state.current && !state.loading) {
+      const chars = [...ev.text];
+      const pos = ev.pos ?? state.aiLen;
+      if (pos > state.aiLen) { selectJob(ev.id, false); return; }  // Lücke → Stand neu laden
+      const fresh = chars.slice(state.aiLen - pos).join("");
+      state.aiLen = Math.max(state.aiLen, pos + chars.length);
+      if (fresh) { state.ai += fresh; appendTo($("#ai-text"), fresh); }
+      // Abschnitts-Überschriften ("──── …") zählen nicht als Lebenszeichen des Modells
+      if (ev.text.trim() && !ev.text.includes("────")) state.lastTokenAt = Date.now();
+      else state.llmSince = Date.now();
+      updateAiWait();
+    } else if (ev.type === "log" && ev.id === state.current && !state.loading) {
+      const n = ev.n ?? state.logTotal;
+      if (n > state.logTotal) { selectJob(ev.id, false); return; }  // Lücke → Stand neu laden
+      if (n < state.logTotal) return;  // schon enthalten
+      state.logTotal = n + 1;
       appendTo($("#log-text"), ($("#log-text").textContent ? "\n" : "") + ev.line);
     } else if (ev.type === "deleted") {
       state.jobs.delete(ev.id);

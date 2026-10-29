@@ -50,6 +50,7 @@ class Job:
     detections: list[str] = field(default_factory=list)
     llm_verdict: str = ""
     ioc_count: int = 0
+    rev: int = 0  # steigt bei jeder Änderung – die Oberfläche verwirft damit veraltete Stände
     created_by: str = ""
 
     def public(self) -> dict:
@@ -96,6 +97,7 @@ class JobManager:
         self.hub = EventHub()
         self.jobs: dict[str, Job] = {}
         self.live: dict[str, list[str]] = {}  # KI-Ausgabe des laufenden Jobs
+        self.log_count: dict[str, int] = {}  # Anzahl Protokoll-Ereignisse des laufenden Jobs
         self._queue: queue.Queue[str] = queue.Queue()
         self._lock = threading.RLock()
         self._cancel: dict[str, threading.Event] = {}
@@ -111,6 +113,7 @@ class JobManager:
         return self.jobs_dir / job_id
 
     def _save(self, job: Job) -> None:
+        job.rev += 1
         path = self.job_dir(job.id) / "job.json"
         tmp = path.with_suffix(".tmp")
         tmp.write_text(json.dumps(asdict(job), ensure_ascii=False, indent=1), encoding="utf-8")
@@ -254,6 +257,7 @@ class JobManager:
             finally:
                 self._cancel.pop(job_id, None)
                 self.live.pop(job_id, None)
+                self.log_count.pop(job_id, None)
 
     def _run(self, job: Job) -> None:
         d = self.job_dir(job.id)
@@ -263,26 +267,35 @@ class JobManager:
         cancel = self._cancel[job.id]
         log_file = open(d / "log.txt", "a", encoding="utf-8")
         self.live[job.id] = []
+        self.log_count[job.id] = 0
         pending: list[str] = []
         last_flush = [time.monotonic()]
+        total = [0]  # Zeichen KI-Text bisher; "pos" in Ereignissen = Startposition des Stücks
+        pending_start = [0]
 
         def flush_tokens():
             if pending:
                 text = "".join(pending)
                 pending.clear()
-                self.hub.publish({"type": "token", "id": job.id, "text": text})
+                self.hub.publish({"type": "token", "id": job.id, "text": text, "pos": pending_start[0]})
             last_flush[0] = time.monotonic()
 
         def on_token(t: str):
+            if not pending:
+                pending_start[0] = total[0]
             self.live[job.id].append(t)
             pending.append(t)
-            if time.monotonic() - last_flush[0] > 0.15:
+            total[0] += len(t)
+            # Abschnitts-Überschriften sofort zeigen, Modelltext gebündelt (alle 150 ms)
+            if "────" in t or time.monotonic() - last_flush[0] > 0.15:
                 flush_tokens()
 
         def on_log(msg: str):
             log_file.write(msg + "\n")
             log_file.flush()
-            self.hub.publish({"type": "log", "id": job.id, "line": msg})
+            n = self.log_count[job.id]
+            self.log_count[job.id] = n + 1
+            self.hub.publish({"type": "log", "id": job.id, "line": msg, "n": n})
 
         def on_progress(pct: int, stage: str):
             flush_tokens()
