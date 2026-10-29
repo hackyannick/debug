@@ -149,3 +149,11 @@ def test_feature_areas_from_identifiers():
     assert set(areas) >= {"Suche", "Downloads & Offline-Nutzung", "Entdecken, Redaktion & Radio",
                           "Bibliothek, Favoriten & Playlists", "Fehlerberichte & Protokolle"}
     assert "Konto & Anmeldung" not in areas  # keine Belege → kein Bereich
+
+
+def test_chunk_choice_prefers_app_code_over_bundled_libraries():
+    lib = ('class SimpleSpanProcessor{onStart(){}forceFlush(){}}/* opentelemetry */RewriteFrames;readZip64;'
+           'fetch("https://docs.sentry.io/a");new Notification("x")') * 5
+    app = ('ipcRenderer.send("player-load-music",t);ipcRenderer.on("player-refresh-music-info",f);'
+           'fetch("https://www.qobuz.com/api.json/0.2/track/getFileUrl");qobuzPlayer.play()') * 2
+    assert interest(app, {"qobuz"}) > 0 > interest(lib, {"qobuz"})

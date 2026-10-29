@@ -146,6 +146,7 @@ class Documenter:
         self.on_progress = on_progress  # (erledigte Schritte, geplante Schritte, Bezeichnung)
         self.client = LLMClient(settings, is_cancelled=is_cancelled)
         self.calls = 0
+        self._root_product: list[str] = []
         self.planned = 1  # wird präzisiert, sobald feststeht, wie viele Teilanalysen nötig sind
 
     def _ask(self, user: str, label: str) -> str:
@@ -161,6 +162,8 @@ class Documenter:
         )
 
     def document(self, result: AnalysisResult) -> str:
+        # Produkt-/Herstellername der App (z. B. „Qobuz“) – Code-Teile, die ihn enthalten, sind meist App-Code
+        self._root_product = [v for k, v in result.product.items() if k in ("Produkt", "Hersteller")]
         budget = self.s.context_chars
         self.planned = max(self.planned, self.calls + 1)
         notes = self._notes(result, budget)
@@ -244,7 +247,9 @@ class Documenter:
         chunks = split_chunks(code, max(2000, size))
         picked = list(range(len(chunks)))
         if len(chunks) > limit:
-            ranked = sorted(picked, key=lambda i: (-interest(chunks[i]), i))[:limit]
+            names = [v for k, v in result.product.items() if k in ("Produkt", "Hersteller")] + self._root_product
+            own = {t for t in (re.sub(r"[^a-z0-9]", "", n.lower()) for n in names) if len(t) >= 3}
+            ranked = sorted(picked, key=lambda i: (-interest(chunks[i], own), i))[:limit]
             picked = sorted(ranked)
             self.log(f"{result.name}: Code hat {len(chunks)} Teile – die {limit} aufschlussreichsten werden "
                      f"einzeln gelesen (Teile {', '.join(str(i + 1) for i in picked)}).")

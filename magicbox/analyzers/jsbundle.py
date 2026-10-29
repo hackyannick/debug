@@ -241,11 +241,25 @@ def feature_areas(facts: dict) -> list[tuple[str, int, list[str]]]:
     return out
 
 
-def interest(text: str) -> int:
-    """Wie „aufschlussreich“ ein Code-Stück ist (Endpunkte, IPC, Aktionen, Electron-APIs) – für die Auswahl
-    der Teile, die die KI einzeln liest."""
-    score = 3 * len(IPC_RE.findall(text)) + 2 * len(URL_RE.findall(text)) + len(ACTION_RE.findall(text))
-    score += sum(1 for rx, _ in _API_RES if rx.search(text))
+# Mitgebündelte Bibliotheken (Telemetrie, ZIP, ORM, Datum, Polyfills …) – deren Code erklärt nicht die App
+BUNDLED_LIBRARY_RE = re.compile(
+    r"opentelemetry|SpanProcessor|\bspanId\b|sentry|RewriteFrames|zip64|ZipFile|centralDirectory|sequelize|"
+    r"QueryInterface|moment\(|momentjs|Intl\.|CanonicalizeTimeZoneName|InitializeNumberFormat|core-js|regenerator|"
+    r"protobuf|@license|SPDX-License|Copyright \(c\)|webpack/runtime|__webpack_require__\.(?:d|r|o)\b|socks|"
+    r"node-gyp|semver|minipass|tar-stream", re.I)
+
+
+def interest(text: str, own: set[str] = frozenset()) -> int:
+    """Wie „aufschlussreich“ ein Code-Stück für die App ist – für die Auswahl der Teile, die die KI einzeln liest.
+    Zählt IPC-Kanäle, Aktionen, eigene Namen (z. B. „qobuz“) und Plattform-APIs; Code mitgebündelter Bibliotheken
+    (Telemetrie, ZIP, ORM …) und deren Doku-Links zählen nicht bzw. negativ."""
+    own_urls = sum(1 for m in URL_RE.finditer(text)
+                   if urlsplit(m.group()).netloc.lower().split(":")[0] not in DOC_HOSTS)
+    low = text.lower()
+    score = 5 * len(IPC_RE.findall(text)) + 2 * len(WEBCONTENTS_SEND_RE.findall(text)) + len(ACTION_RE.findall(text))
+    score += own_urls + sum(1 for rx, _ in _API_RES if rx.search(text))
+    score += 3 * sum(low.count(t) for t in own)
+    score -= 4 * len(BUNDLED_LIBRARY_RE.findall(text))
     return score
 
 
