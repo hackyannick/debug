@@ -136,10 +136,29 @@ class OIDCClient:
                                       audience=self.s.oidc_client_id, nonce=nonce)
         except ValueError as exc:
             raise OIDCError(f"ID-Token ungültig: {exc}") from exc
-        groups = claims.get("groups") if isinstance(claims.get("groups"), list) else []
+        if "email" not in claims or "groups" not in claims:
+            # Viele Anbieter (auch Hydra-Consent-Handler) liefern E-Mail/Gruppen nur über userinfo
+            claims = {**self._userinfo(tokens.get("access_token", ""), claims.get("sub")), **claims}
+        raw_groups = claims.get("groups")
+        groups = raw_groups if isinstance(raw_groups, list) else [raw_groups] if isinstance(raw_groups, str) else []
         name = claims.get("email") or claims.get("preferred_username") or claims.get("sub", "?")
-        ident = Identity(str(claims.get("sub", "")), str(name), "oidc", tuple(map(str, groups)))
+        ident = Identity(str(claims.get("sub", "")), str(name), "oidc", tuple(map(str, groups)),
+                         groups_known="groups" in claims)
         return ident, tokens["id_token"], next_path
+
+    def _userinfo(self, access_token: str, sub) -> dict:
+        """Claims vom userinfo-Endpunkt; nur übernommen, wenn sie zur selben Identität (sub) gehören."""
+        endpoint = self.discovery().get("userinfo_endpoint")
+        if not endpoint or not access_token:
+            return {}
+        try:
+            info = get_json(self._server_url(endpoint),
+                            {"Accept": "application/json", "Authorization": f"Bearer {access_token}"})
+        except (OSError, ValueError, urllib.error.URLError):
+            return {}
+        if not isinstance(info, dict) or info.get("sub") != sub:
+            return {}
+        return info
 
     def _token_request(self, code: str, verifier: str) -> dict:
         if not code:

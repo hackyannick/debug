@@ -258,3 +258,42 @@ def test_oidc_rejects_bad_callbacks(tmp_path, fake_llm, hydra):
         assert status == 400 and b"<script>" not in body and b"&lt;script&gt;" in body
     finally:
         srv.shutdown()
+
+
+def _login_with(srv, hydra, claims):
+    _, _, res = request(srv, "GET", "/auth/login")
+    st = _cookie(res, "mb_oidc_state")
+    cb = hydra.authorize(res.getheader("Location"), claims)
+    return request(srv, "GET", cb.split(".com", 1)[1], headers={"Cookie": st})
+
+
+def test_oidc_groups_and_email_from_userinfo(tmp_path, fake_llm, hydra):
+    """Wie bei owa-gate: ID-Token enthält nur sub, E-Mail und Gruppen kommen über userinfo."""
+    srv = _oidc_server(tmp_path, fake_llm, hydra, auth_groups=["magicbox"])
+    try:
+        hydra.userinfo = {"sub": "c2666ea6", "email": "yannick@hackdv.com", "groups": ["magicbox"]}
+        status, _, res = _login_with(srv, hydra, {"sub": "c2666ea6"})
+        assert status == 303, res
+        session = _cookie(res, "mb_session")
+        _, st, _ = request(srv, "GET", "/api/status", headers={"Cookie": session})
+        assert st["user"]["name"] == "yannick@hackdv.com"
+
+        # userinfo einer anderen Identität wird nicht übernommen
+        hydra.userinfo = {"sub": "jemand-anders", "email": "x@y.de", "groups": ["magicbox"]}
+        status, body, _ = _login_with(srv, hydra, {"sub": "c2666ea6"})
+        assert status == 403
+    finally:
+        srv.shutdown()
+
+
+def test_oidc_explains_missing_groups_claim(tmp_path, fake_llm, hydra):
+    srv = _oidc_server(tmp_path, fake_llm, hydra, auth_groups=["magicbox"])
+    try:
+        hydra.userinfo = None  # Anbieter liefert nirgends Gruppen
+        status, body, _ = _login_with(srv, hydra, {"sub": "c2666ea6"})
+        assert status == 403 and "keine Gruppen übermittelt".encode() in body
+        # Gruppen geliefert, aber die falschen → Meldung nennt, was ankam
+        status, body, _ = _login_with(srv, hydra, {"sub": "c2666ea6", "email": "a@b.de", "groups": ["it"]})
+        assert status == 403 and "(übermittelt: it)".encode() in body
+    finally:
+        srv.shutdown()

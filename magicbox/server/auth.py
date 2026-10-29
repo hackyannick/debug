@@ -46,6 +46,7 @@ class Identity:
     name: str
     method: str  # token | kratos | oathkeeper | oidc | none
     groups: tuple[str, ...] = ()
+    groups_known: bool = True  # False: Anbieter hat gar keinen groups-Claim geliefert
 
 
 class AuthFailed(Exception):
@@ -234,7 +235,15 @@ class Authenticator:
         if not allowed(ident.name, self.s.auth_allowed):
             raise Forbidden(f"{ident.name} ist für die Magic Box nicht freigeschaltet.")
         if self.s.auth_groups and not set(self.s.auth_groups) & set(ident.groups):
-            raise Forbidden(f"{ident.name} ist in keiner der Gruppen {', '.join(self.s.auth_groups)}.")
+            wanted = ", ".join(self.s.auth_groups)
+            if not ident.groups_known:
+                raise Forbidden(
+                    f"{ident.name}: Der Anmeldedienst hat keine Gruppen übermittelt (weder im ID-Token noch über "
+                    f"userinfo), daher ist die Zugehörigkeit zu „{wanted}“ nicht prüfbar. Abhilfe: dem OIDC-Client "
+                    f"den Scope „groups“ erlauben und in oidc_scopes anfordern – oder auth_groups leeren und "
+                    f"stattdessen auth_allowed (E-Mail/Domain) nutzen.")
+            have = ", ".join(ident.groups) or "keine"
+            raise Forbidden(f"{ident.name} ist in keiner der Gruppen {wanted} (übermittelt: {have}).")
 
     def login_url(self, return_to: str, aal2: bool = False) -> str:
         if self.mode == "oidc":

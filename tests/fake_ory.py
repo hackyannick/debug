@@ -27,6 +27,7 @@ class FakeOry:
         self.signing_key = None
         self.public = "https://id.example.de"
         self.token_requests: list[dict] = []
+        self.userinfo: dict | None = None  # Antwort des userinfo-Endpunkts (None = 401)
         self.jwks: list[dict] = []
         self.calls: list[str] = []
         outer = self
@@ -61,7 +62,12 @@ class FakeOry:
                     p = outer.public  # wie Hydra: öffentliche URLs, obwohl intern abgefragt
                     return self._json({"issuer": p + "/", "authorization_endpoint": p + "/oauth2/auth",
                                        "token_endpoint": p + "/oauth2/token", "jwks_uri": p + "/.well-known/jwks.json",
-                                       "end_session_endpoint": p + "/oauth2/sessions/logout"})
+                                       "end_session_endpoint": p + "/oauth2/sessions/logout",
+                                       "userinfo_endpoint": p + "/userinfo"})
+                if path == "/userinfo":
+                    if self.headers.get("Authorization") != "Bearer at" or outer.userinfo is None:
+                        return self._json({"error": "invalid_token"}, 401)
+                    return self._json(outer.userinfo)
                 self._json({"error": "not found"}, 404)
 
             def do_POST(self):
