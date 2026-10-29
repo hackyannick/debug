@@ -24,8 +24,8 @@ class Runtime:
 RUNTIMES = (
     Runtime("Electron", (b"electron.asar", b"ELECTRON_RUN_AS_NODE", b"electron.exe", b"electron::", b"ElectronMain"), 2,
             "Die .exe ist die Electron-Laufzeit (Chromium + Node.js) und bei allen Electron-Apps nahezu gleich. Die "
-            "eigentliche Programmlogik liegt als JavaScript in resources\\app.asar neben der .exe. Für eine Doku der "
-            "App diese Datei, den Installer oder den Programmordner (als ZIP) hochladen.",
+            "eigentliche Programmlogik liegt als JavaScript in resources\\app.asar oder im Ordner resources\\app neben "
+            "der .exe. Für eine Doku der App diese Datei bzw. den Ordner (als ZIP) oder den Installer hochladen.",
             shell_only=True, version_re=rb"Electron/(\d+\.\d+\.\d+)"),
     Runtime("Chromium Embedded Framework (CEF)", (b"libcef.dll", b"cef_initialize", b"CefInitialize"), 1,
             "Die Oberfläche ist eine eingebettete Web-Anwendung (HTML/JavaScript), meist in Unterordnern oder "

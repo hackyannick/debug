@@ -66,7 +66,8 @@ class AsarAnalyzer(Analyzer):
         modules = [(p, e) for p, e in entries if "node_modules/" in f"/{p}"]
         unpacked = [p for p, e in entries if e.get("unpacked")]
 
-        pkg = self._package(ctx.data, base, dict(entries).get("package.json"), result)
+        entry = dict(entries).get("package.json")
+        pkg = package_info(read(ctx.data, base, entry) if entry else None, result)
         main = posixpath.normpath(pkg.get("main", "index.js")) if pkg else "index.js"
 
         kv = {"Dateien gesamt": str(len(entries)), "Eigene Dateien": str(len(own)),
@@ -77,19 +78,14 @@ class AsarAnalyzer(Analyzer):
         rows = [[p, human_size(int(e.get("size", 0) or 0))] for p, e in own[:500]]
         result.add(Section(f"Eigene Dateien ({len(own)})", table=Table(["Pfad", "Größe"], rows, total=len(own)),
                            llm_priority=1))
-        self._modules(ctx.data, base, modules, pkg, result)
+        modules_table([(p, read(ctx.data, base, e)) for p, e in modules if is_manifest(p)], pkg, result)
 
         if ctx.recurse is None or ctx.depth >= s.max_archive_depth:
             return
 
-        def rank(item):
-            p, e = item
-            low = p.lower()
-            return (low != "package.json", posixpath.normpath(p) != main, not low.endswith(CODE_EXT),
-                    -int(e.get("size", 0) or 0))
-
         budget, taken = s.max_extract_bytes, 0
-        for path, entry in sorted(own, key=rank)[: s.max_archive_members]:
+        ranked = sorted(own, key=lambda item: rank(item[0], int(item[1].get("size", 0) or 0), "", main))
+        for path, entry in ranked[: s.max_archive_members]:
             if path.lower().endswith(SKIP_EXT):
                 continue
             blob = read(ctx.data, base, entry)
@@ -100,59 +96,91 @@ class AsarAnalyzer(Analyzer):
             if child is not None:
                 result.children.append(child)
 
-    @staticmethod
-    def _package(data: bytes, base: int, entry: dict | None, result: AnalysisResult) -> dict:
-        blob = read(data, base, entry) if entry else None
-        if not blob:
-            return {}
-        try:
-            pkg = json.loads(blob.decode("utf-8-sig"))
-        except (ValueError, UnicodeDecodeError):
-            return {}
-        if not isinstance(pkg, dict):
-            return {}
-        author = pkg.get("author")
-        if isinstance(author, dict):
-            author = author.get("name", "")
-        kv = {k: clip(str(v), 300) for k, v in (
-            ("Name", pkg.get("productName") or pkg.get("name")), ("Paketname", pkg.get("name")),
-            ("Version", pkg.get("version")), ("Beschreibung", pkg.get("description")), ("Autor", author),
-            ("Startdatei (main)", pkg.get("main")), ("Homepage", pkg.get("homepage")), ("Lizenz", pkg.get("license")),
-        ) if v}
-        result.add(Section("App-Steckbrief (package.json)", kv=kv, llm_priority=0))
-        for key, label in (("Name", "Produkt"), ("Version", "Version"), ("Beschreibung", "Beschreibung"),
-                           ("Autor", "Hersteller")):
-            if kv.get(key):
-                result.product[label] = kv[key]
-        scripts = pkg.get("scripts")
-        if isinstance(scripts, dict) and scripts:
-            result.add(Section("npm-Skripte", kv={k: clip(str(v), 200) for k, v in list(scripts.items())[:30]},
-                               llm_priority=3))
-        return pkg
 
-    @staticmethod
-    def _modules(data: bytes, base: int, modules: list, pkg: dict, result: AnalysisResult) -> None:
-        """Fremdbibliotheken: Name + Version + Beschreibung aus node_modules/<paket>/package.json."""
-        rows = []
-        for path, entry in modules:
-            parts = path.split("node_modules/")[-1].split("/")
-            if path.count("node_modules/") != 1:
-                continue  # verschachtelte Abhängigkeiten auslassen
-            name_parts = 2 if parts[0].startswith("@") else 1
-            if parts[name_parts:] != ["package.json"]:
-                continue
-            blob = read(data, base, entry)
-            try:
-                info = json.loads(blob.decode("utf-8-sig")) if blob else {}
-            except (ValueError, UnicodeDecodeError):
-                info = {}
-            rows.append(["/".join(parts[:name_parts]), str(info.get("version", "")),
-                         clip(str(info.get("description", "")), 120)])
-        declared = sorted({*((pkg.get("dependencies") or {}).keys())}) if pkg else []
-        if not rows and declared:
-            rows = [[d, str(pkg["dependencies"][d]), ""] for d in declared]
-        if rows:
-            rows.sort(key=lambda r: r[0])
-            result.add(Section(f"Verwendete npm-Pakete ({len(rows)})",
-                               table=Table(["Paket", "Version", "Beschreibung"], rows[:300], total=len(rows)),
-                               llm_priority=1))
+# ---------------------------------------------------------------------- gemeinsam für ASAR und App-Ordner (ZIP)
+
+def rank(path: str, size: int, root: str, main: str) -> tuple:
+    """Reihenfolge: package.json, Startdatei, Code, Rest – jeweils größte zuerst."""
+    rel = path[len(root):] if path.startswith(root) else path
+    low = rel.lower()
+    return (low != "package.json", posixpath.normpath(rel) != main, not low.endswith(CODE_EXT), -size)
+
+
+def is_manifest(path: str) -> bool:
+    """node_modules/<paket>/package.json bzw. node_modules/@scope/<paket>/package.json (nicht verschachtelt)."""
+    if path.count("node_modules/") != 1:
+        return False
+    parts = path.split("node_modules/")[-1].split("/")
+    n = 2 if parts[0].startswith("@") else 1
+    return parts[n:] == ["package.json"]
+
+
+def node_app_root(names) -> str | None:
+    """Ordner mit der obersten package.json außerhalb von node_modules (z. B. "resources/app/") – sonst None."""
+    roots = [n[: -len("package.json")] for n in names
+             if n.endswith("package.json") and (n == "package.json" or n.endswith("/package.json"))
+             and "node_modules/" not in n]
+    return min(roots, key=lambda r: (r.count("/"), len(r))) if roots else None
+
+
+def wanted(name: str) -> bool:
+    """Was aus einem App-Ordner gelesen werden soll: eigene Dateien und die Steckbriefe der npm-Pakete."""
+    if "node_modules/" in name:
+        return is_manifest(name)
+    return not name.lower().endswith(SKIP_EXT)
+
+
+def package_info(blob: bytes | None, result: AnalysisResult) -> dict:
+    if not blob:
+        return {}
+    try:
+        pkg = json.loads(blob.decode("utf-8-sig"))
+    except (ValueError, UnicodeDecodeError):
+        return {}
+    if not isinstance(pkg, dict):
+        return {}
+    author = pkg.get("author")
+    if isinstance(author, dict):
+        author = author.get("name", "")
+    kv = {k: clip(str(v), 300) for k, v in (
+        ("Name", pkg.get("productName") or pkg.get("name")), ("Paketname", pkg.get("name")),
+        ("Version", pkg.get("version")), ("Beschreibung", pkg.get("description")), ("Autor", author),
+        ("Startdatei (main)", pkg.get("main")), ("Homepage", pkg.get("homepage")), ("Lizenz", pkg.get("license")),
+    ) if v}
+    result.add(Section("App-Steckbrief (package.json)", kv=kv, llm_priority=0))
+    for key, label in (("Name", "Produkt"), ("Version", "Version"), ("Beschreibung", "Beschreibung"),
+                       ("Autor", "Hersteller")):
+        if kv.get(key):
+            result.product[label] = kv[key]
+    scripts = pkg.get("scripts")
+    if isinstance(scripts, dict) and scripts:
+        result.add(Section("npm-Skripte", kv={k: clip(str(v), 200) for k, v in list(scripts.items())[:30]},
+                           llm_priority=3))
+    return pkg
+
+
+def is_electron(pkg: dict) -> bool:
+    deps = {**(pkg.get("dependencies") or {}), **(pkg.get("devDependencies") or {})} if pkg else {}
+    return any(k in deps for k in ("electron", "electron-builder", "electron-updater", "@electron/remote"))
+
+
+def modules_table(manifests: list[tuple[str, bytes | None]], pkg: dict, result: AnalysisResult) -> None:
+    """Fremdbibliotheken: Name + Version + Beschreibung aus node_modules/<paket>/package.json."""
+    rows = []
+    for path, blob in manifests:
+        parts = path.split("node_modules/")[-1].split("/")
+        name = "/".join(parts[: 2 if parts[0].startswith("@") else 1])
+        try:
+            info = json.loads(blob.decode("utf-8-sig")) if blob else {}
+        except (ValueError, UnicodeDecodeError):
+            info = {}
+        if not isinstance(info, dict):
+            info = {}
+        rows.append([name, str(info.get("version", "")), clip(str(info.get("description", "")), 120)])
+    if not rows and pkg and isinstance(pkg.get("dependencies"), dict):
+        rows = [[d, str(v), ""] for d, v in pkg["dependencies"].items()]
+    if rows:
+        rows.sort(key=lambda r: r[0])
+        result.add(Section(f"Verwendete npm-Pakete ({len(rows)})",
+                           table=Table(["Paket", "Version", "Beschreibung"], rows[:300], total=len(rows)),
+                           llm_priority=1))

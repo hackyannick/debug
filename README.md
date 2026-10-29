@@ -60,7 +60,9 @@ Beim Hochladen (Feld *Frage an die KI*) oder später zu jedem fertigen Auftrag k
 Die Antworten stehen oben im Bericht unter *Deine Fragen an die KI* (neueste zuerst).
 
 **Tipp für Electron-Programme** (Discord, Slack, Qobuz, VS Code …): nicht die `.exe` hochladen, sondern
-`resources\app.asar`, den Installer oder den Programmordner als ZIP – sonst dokumentiert die KI nur Electron.
+`resources\app.asar` – oder, wenn es stattdessen einen Ordner `resources\app` gibt, diesen als ZIP
+(`Compress-Archive resources\app app.zip`) – bzw. den Installer; sonst dokumentiert die KI nur Electron.
+`node_modules` werden dabei nur mit Name und Version aufgelistet, der eigene Code wird zuerst gelesen.
 
 **Gegenprüfung:** Nennt die KI DLLs, die in den Analysedaten nicht vorkommen, hängt die Magic Box einen
 sichtbaren Hinweis an den Text an.

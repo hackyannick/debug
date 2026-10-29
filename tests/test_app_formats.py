@@ -129,3 +129,22 @@ def test_llm_reads_app_code_before_runtime(fake_llm, settings):
     Documenter(s).document(root)
     order = [r["messages"][1]["content"].split("„")[1].split("“")[0] for r in fake_llm.requests[:-1]]
     assert order[:2] == ["app.asar", "dist/main.js"] and set(order[2:]) == {"libGLESv2.dll", "Qobuz.exe"}
+
+
+def test_unpacked_app_folder_as_zip_from_powershell(settings):
+    """resources\\app als ZIP (Compress-Archive, Windows PowerShell 5: Backslashes) mit vielen node_modules."""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        for path, data in APP.items():
+            zf.writestr("app\\" + path.replace("/", "\\"), data)
+        for i in range(500):
+            zf.writestr(f"app\\node_modules\\lib{i}\\index.js", b"module.exports = 1;\n")
+    s = replace(settings, profile="allgemein", max_archive_members=50)
+    r = Engine(s).analyze_bytes("qobuz-app.zip", buf.getvalue())
+    assert r.description == "Electron-App (Programmordner)"  # erkannt an require('electron')
+    assert r.product["Produkt"] == "Qobuz"
+    names = [c.name for c in r.children]
+    assert names[:2] == ["app/package.json", "app/dist/main.js"] and "app/dist/player.js" in names
+    assert not any("node_modules" in n or n.endswith(".png") for n in names)
+    npm = next(s for s in r.sections if s.title.startswith("Verwendete npm-Pakete"))
+    assert ["axios", "1.6.2", "Promise based HTTP client"] in npm.table.rows

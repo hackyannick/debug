@@ -7,6 +7,7 @@ import gzip
 import io
 import lzma
 import os
+import re
 import subprocess
 import tarfile
 import tempfile
@@ -16,6 +17,7 @@ import zlib
 from magicbox import tools
 from magicbox.model import AnalysisResult, Section, Table
 
+from .asar import is_electron, modules_table, node_app_root, package_info, rank, wanted
 from .base import Analyzer, Context, human_size
 from .strings import extract_strings
 
@@ -158,6 +160,10 @@ class ArchiveAnalyzer(Analyzer):
         if any(n.lower().endswith("vbaproject.bin") for n in names):
             result.find("high", "Office-Makros (VBA) enthalten", "Das Dokument enthält VBA-Makros.")
 
+        app_root = node_app_root([m[0] for m in members])
+        if app_root is not None:
+            members = self._node_app(members, app_root, result)
+
         if ctx.recurse is None or ctx.depth >= s.max_archive_depth:
             if members:
                 result.find("info", "Inhalt nicht rekursiv analysiert",
@@ -169,6 +175,25 @@ class ArchiveAnalyzer(Analyzer):
             child = ctx.recurse(name, data)
             if child is not None:
                 result.children.append(child)
+
+    @staticmethod
+    def _node_app(members: list, root: str, result: AnalysisResult) -> list:
+        """Ausgepackte Electron-/Node.js-App (z. B. resources/app): Steckbrief, npm-Pakete, eigener Code zuerst."""
+        by_name = {n: d for n, _, d in members}
+        pkg = package_info(by_name.get(root + "package.json"), result)
+        uses_electron = is_electron(pkg) or any(
+            d and n.endswith((".js", ".cjs", ".mjs")) and "node_modules/" not in n and
+            re.search(rb"""require\(\s*['"]electron['"]\s*\)|from\s+['"]electron['"]""", d[:2_000_000])
+            for n, _, d in members)
+        result.description = "Electron-App (Programmordner)" if uses_electron else "Node.js-Projekt (Ordner)"
+        modules_table([(n, d) for n, _, d in members if "node_modules/" in n and d is not None], pkg, result)
+        main = os.path.normpath(pkg.get("main", "index.js")).replace(os.sep, "/") if pkg else "index.js"
+        own = [m for m in members if "node_modules/" not in m[0]]
+        skipped = len(members) - len(own)
+        if skipped:
+            result.find("info", "Fremdbibliotheken nur aufgelistet",
+                        f"{skipped} Dateien in node_modules wurden nicht einzeln analysiert (Versionen siehe npm-Pakete).")
+        return sorted(own, key=lambda m: rank(m[0], m[1], root, main))
 
     # ------------------------------------------------------------------
     def _budget(self, ctx: Context):
@@ -189,8 +214,14 @@ class ArchiveAnalyzer(Analyzer):
         out, skipped, locked = [], 0, []
         opener = _PasswordOpener(ctx)
         with zipfile.ZipFile(io.BytesIO(ctx.data)) as zf:
+            # Windows PowerShell 5 (Compress-Archive) schreibt Backslashes als Pfadtrenner
+            app_root = node_app_root([i.filename.replace("\\", "/") for i in zf.infolist()])
             for info in zf.infolist():
-                if info.is_dir():
+                if info.is_dir() or info.filename.endswith("\\"):
+                    continue
+                name = info.filename.replace("\\", "/")
+                if app_root is not None and not wanted(name):
+                    out.append((name, info.file_size, None))  # node_modules & Medien: nur auflisten
                     continue
                 data = None
                 if not take(info.file_size):
@@ -206,7 +237,7 @@ class ArchiveAnalyzer(Analyzer):
                         data = opener.read(zf, info)  # z. B. Deflate64 – evtl. kann 7-Zip helfen
                     except (zipfile.BadZipFile, RuntimeError, OSError, zlib.error) as exc:
                         result.errors.append(f"{info.filename}: {exc}")
-                out.append((info.filename, info.file_size, data))
+                out.append((name, info.file_size, data))
                 ratio = info.file_size / max(1, info.compress_size)
                 if ratio > 200 and info.file_size > 50 * 1024 * 1024:
                     result.find("high", "Verdacht auf ZIP-Bombe", f"{info.filename}: Kompressionsrate {ratio:.0f}:1")
@@ -262,21 +293,28 @@ class ArchiveAnalyzer(Analyzer):
                 result.find("low", "Passwortgeschütztes Archiv", "Mit keinem bekannten Passwort zu öffnen.")
                 return []
             result.tools.append("7z")
-            out, total = [], 0
+            out, total, read_count = [], 0, 0
+            found = []
             for dirpath, _dirs, files in os.walk(outdir):
                 for fn in sorted(files):
                     full = os.path.join(dirpath, fn)
-                    rel = os.path.relpath(full, outdir).replace(os.sep, "/")
-                    if os.path.islink(full):
-                        out.append((f"{rel} -> (Symlink)", 0, None))
-                        continue
-                    size = os.path.getsize(full)
-                    data = None
-                    if len(out) < max_members and total + size <= limit:
-                        with open(full, "rb") as f:
-                            data = f.read()
-                        total += size
-                    out.append((rel, size, data))
+                    found.append((os.path.relpath(full, outdir).replace(os.sep, "/"), full))
+            app_root = node_app_root([rel for rel, _ in found])
+            for rel, full in found:
+                if os.path.islink(full):
+                    out.append((f"{rel} -> (Symlink)", 0, None))
+                    continue
+                size = os.path.getsize(full)
+                data = None
+                if app_root is not None and not wanted(rel):
+                    out.append((rel, size, None))
+                    continue
+                if read_count < max_members and total + size <= limit:
+                    read_count += 1
+                    with open(full, "rb") as f:
+                        data = f.read()
+                    total += size
+                out.append((rel, size, data))
             return out
 
     def _tar(self, ctx: Context, result: AnalysisResult):
