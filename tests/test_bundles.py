@@ -141,7 +141,7 @@ def test_feature_areas_from_identifiers():
     facts = {"ipc": {c: "on" for c in ("play-music", "pause-music", "change-volume", "chromecast-scan-for-devices",
                                         "chromecast-player-use-device", "open-download-folder", "flush-all-cache",
                                         "send-log", "notify-error")},
-             "actions": ["SEARCH/ALL", "search/albums", "favorite/create", "playlist/addTracks"],
+             "actions": ["SEARCH/ALL", "search/albums", "favorite/create", "playlist/addTracks", "event/reportPlayerIssue"],
              "api_paths": ["/discover/new-releases", "/discover/playlists"]}
     areas = {label: (n, ex) for label, n, ex in feature_areas(facts)}
     assert areas["Wiedergabe & Warteschlange"][0] >= 3
