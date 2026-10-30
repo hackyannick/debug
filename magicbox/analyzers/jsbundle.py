@@ -106,7 +106,20 @@ OTHER_WORDS = {"você", "não", "está", "usted", "puedes", "para", "las", "los"
                "votre", "les", "des", "pour", "est", "pas", "sono", "seu", "sua", "também", "aquí", "nos", "vos"}
 LIBRARY_MARKERS = re.compile(r"sentry|sequelize|moment|jszip|socks|\bspan\b|transaction|\bdsn\b|deprecated|spotlight|"
                              r"tracing|promise|callback|undefined|instance|webpack|polyfill|eslint|\breact\b|redux|"
-                             r"\bprop\b|argument|stack ?trace|\bmodule\b|options object|isolation scope", re.I)
+                             r"\bprop\b|argument|stack ?trace|\bmodule\b|options object|isolation scope|minidump|"
+                             r"zip64|central directory|check-?ins?\b|\bscope\b|debugger|\banr\b|\bframe\b|"
+                             r"\bsql\b|sqlite|\bbatch|\bqueue ?size|\battributes?\b|association|iterator|"
+                             r"connection ?manager|multicast|dhcp|\bsocket\b|\bnull\b|\bboolean\b|\bpassing\b|"
+                             r"\bconfigured\b|\bsandbox\b|init box|\bsegment\b|\bbits?\b|\bbuffer\b|\bvalue\b|"
+                             r"\biterable\b|\bconstructor\b|\bschema\b|\bmodel\b|\bmemory\b|duplicate key|identifier|where object|"
+                             r"source files|context lines|bounds of|pending requests|\bsdk\b|logger|error object|"
+                             r"no client|nodeclient|forget to load", re.I)
+CODE_WORD_RE = re.compile(r"\b(?!macOS\b)[a-z]{3,}[A-Z][A-Za-z]*\b")  # pressDelay, maxQueueSize … = Entwicklermeldung
+# Umgebungsvariablen, die eingebaute Bibliotheken (Sentry, CI-Erkennung, graceful-fs …) abfragen
+ENV_NOISE_RE = re.compile(r"^(?:SENTRY_|CI_|GITHUB_|GITLAB_|AWS_|ALIYUN_|IBM_|TENCENT|FLY_|PRISMA_|VERCEL|NETLIFY|"
+                          r"HEROKU|RENDER_|RAILWAY|BITBUCKET_|APPVEYOR_|CODEBUILD_|CIRCLE|TRAVIS|BUILDKITE|DRONE|"
+                          r"JENKINS|TEAMCITY|CF_PAGES|SPECTRON|TEST_|GRACEFUL_FS_|UV_THREADPOOL|READABLE_STREAM|"
+                          r"NODE_DEBUG$|REGION_NAME$|CI$|DEBUG$)")
 
 
 def ui_rank(text: str, own: set[str] = frozenset()) -> tuple:
@@ -167,7 +180,8 @@ def extract(text: str, own: set[str] = frozenset()) -> dict:
         found = Counter(m.group(1) for m in rx.finditer(text))
         if found:
             facts[key] = _top(found, 40)
-    env = Counter(m.group(1) or m.group(2) for m in ENV_RE.finditer(text))
+    env = Counter(name for m in ENV_RE.finditer(text) for name in [m.group(1) or m.group(2)]
+                  if not ENV_NOISE_RE.match(name))
     if env:
         facts["env"] = _top(env, 40)
     actions = Counter()
@@ -184,7 +198,9 @@ def extract(text: str, own: set[str] = frozenset()) -> dict:
     texts = {t.strip() for m in QUOTED_RE.finditer(text) for t in [m.group(1) or m.group(2)]
              if " " in t and not t.startswith(("http", "/", ".", "#")) and "{" not in t and "=" not in t}
 
-    natural = [t for t in texts if not _readability(t)[0] and _language_ok(t)]
+    # Meldungen eingebauter Bibliotheken (Sentry, Sequelize, ZIP …) sind keine Oberflächentexte der App
+    natural = [t for t in texts if not _readability(t)[0] and _language_ok(t)
+               and not LIBRARY_MARKERS.search(t) and not CODE_WORD_RE.search(t)]
     if natural:
         facts["texts"] = sorted(natural, key=lambda t: ui_rank(t, own))[:50]
     return facts

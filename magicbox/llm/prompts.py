@@ -7,12 +7,14 @@ from magicbox.config import Settings
 DOC_HEADINGS = [
     ("Kurzfassung", "3–5 Sätze: Was ist das, wofür ist es da, für wen ist es gedacht? Für Nicht-Experten."),
     ("Was ist das für eine Datei?", "Format, Plattform, Programmiersprache/Compiler, Herkunft (Hersteller, Version), sofern belegt."),
-    ("Was macht sie?", "Die Funktionsweise Schritt für Schritt bzw. die Hauptfunktionen. Nutze Aufzählungen."),
+    ("Was macht sie?", "Die Funktionsweise Schritt für Schritt bzw. die Hauptfunktionen. Nutze Aufzählungen. Gibt es "
+                       "„Erkannte Funktionsbereiche“: je Bereich ein Punkt, keinen auslassen."),
     ("Aufbau & wichtige Komponenten", "Wichtige Funktionen/Klassen/Module/Dateien und ihr Zusammenspiel. Gern eine Tabelle."),
     ("Schnittstellen & Abhängigkeiten", "Bibliotheken, Netzwerk (Adressen, Protokolle), Dateien, Registry, Kommandozeilen-Parameter, Konfiguration."),
     ("Technische Besonderheiten", "Verwendete Frameworks/Laufzeitumgebungen, Build-Details, Plattform-Eigenheiten."),
     ("Offene Fragen & Grenzen der Analyse", "Was ließ sich statisch nicht klären? Was wären sinnvolle nächste Schritte?"),
-    ("Glossar", "Kurze, einfache Erklärungen der verwendeten Fachbegriffe (Tabelle: Begriff | Erklärung)."),
+    ("Glossar", "Kurze, einfache Erklärungen der oben verwendeten Fachbegriffe (Tabelle: Begriff | Erklärung), "
+                "höchstens 25 Einträge."),
 ]
 
 
@@ -30,7 +32,8 @@ MALWARE_HEADINGS = [
     ("Erkennung & Gegenmaßnahmen", "Wie erkennt man eine Infektion, was blockieren/bereinigen? Konkret und umsetzbar."),
     ("Offene Fragen & nächste Schritte", "Was blieb statisch unklar (z. B. verschlüsselte Konfiguration)? Empfehlung, "
                                          "z. B. dynamische Analyse in einer isolierten Sandbox."),
-    ("Glossar", "Kurze, einfache Erklärungen der Fachbegriffe (Tabelle: Begriff | Erklärung)."),
+    ("Glossar", "Kurze, einfache Erklärungen der oben verwendeten Fachbegriffe (Tabelle: Begriff | Erklärung), "
+                "höchstens 25 Einträge."),
 ]
 
 

@@ -12,6 +12,7 @@ import urllib.request
 from typing import Callable, Iterator
 
 from magicbox.config import Settings
+from magicbox.llm.tidy import loop_start
 
 THINK_RE = re.compile(r"<think>.*?</think>\s*", re.S)
 
@@ -74,14 +75,24 @@ class LLMClient:
 
     def chat(self, messages: list[dict], on_token: Callable[[str], None] | None = None) -> str:
         parts: list[str] = []
-        for token in self._stream(messages):
-            if self.is_cancelled():
-                raise LLMCancelled("Abgebrochen")
-            parts.append(token)
-            if on_token:
-                on_token(token)
-        text = "".join(parts)
-        return THINK_RE.sub("", text).strip()
+        stream = self._stream(messages)
+        try:
+            for token in stream:
+                if self.is_cancelled():
+                    raise LLMCancelled("Abgebrochen")
+                parts.append(token)
+                if on_token:
+                    on_token(token)
+                # Wiederholungsschleife: Generierung abbrechen statt bis zum Token-Limit weiterzurechnen
+                if "\n" in token and loop_start("".join(parts)) is not None:
+                    if on_token:
+                        on_token("\n[Wiederholung erkannt – Antwort hier abgeschnitten]\n")
+                    break
+        finally:
+            stream.close()  # beendet die HTTP-Verbindung, Ollama stoppt dann die Generierung
+        text = THINK_RE.sub("", "".join(parts))
+        pos = loop_start(text)
+        return (text[:pos] if pos is not None else text).strip()
 
     def _stream(self, messages: list[dict]) -> Iterator[str]:
         s = self.s

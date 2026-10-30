@@ -15,6 +15,7 @@ from magicbox.model import AnalysisResult, Section
 
 from . import prompts
 from .client import LLMClient
+from .tidy import tidy_glossary
 
 Log = Callable[[str], None]
 SEV_LABEL = {"high": "HOCH", "medium": "MITTEL", "low": "NIEDRIG", "info": "INFO"}
@@ -171,6 +172,7 @@ class Documenter:
         include_code = not notes  # Code wurde bereits in Notizen verdichtet
         facts = facts_text(result, facts_budget, include_code=include_code)
         doc = self._ask(prompts.document_prompt(result.name, facts, notes, self.s), "Dokumentation schreiben")
+        doc = tidy_glossary(doc)
         doc += verification_note(result, doc)
         result.llm_doc = doc
         result.llm_model = self.s.model
@@ -186,7 +188,8 @@ class Documenter:
                                                   node.kind == "asar" for g in node.children]
             software = self.s.profile == "allgemein"
             interesting = [c for c in candidates if (c.kind not in BORING_KINDS or c.findings)
-                           and not (software and c.kind == "unknown" and not c.findings)]
+                           and not (software and c.kind == "unknown" and not c.findings)
+                           and not (software and ANIMATION_DATA_RE.search(c.name.replace("\\", "/")) and not c.findings)]
 
             def rank(c: AnalysisResult) -> tuple:
                 serious = len([f for f in c.findings if f.severity in ("high", "medium")])
@@ -313,6 +316,8 @@ def verification_note(result: AnalysisResult, text: str) -> str:
 
 
 GROUP_MAX_SIZE = 8 * 1024
+# Animations-/Grafikdaten als JSON (Lottie) – für die KI ohne Aussage über die App
+ANIMATION_DATA_RE = re.compile(r"(?:^|/)(?:lotties?|motions|animations?)/[^/]+\.json$", re.I)
 DATA_LANG_RE = re.compile(r"\((?:json|sql|text|css|xml|yaml|toml|ini|csv|markdown)\)")
 
 

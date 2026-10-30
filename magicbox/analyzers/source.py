@@ -65,6 +65,10 @@ OUTLINE_PATTERNS = {
     "cpp": re.compile(r"^[\w\*:<>][\w\s\*:<>,]*?\b([\w:~]+)\s*\([^;]*\)\s*(?:const\s*)?\{", re.M),
 }
 
+# Modulnamen wie „fs“, „node:path“, „@scope/pkg/sub“, „./util.js“ – in minifiziertem Code trifft das Muster sonst
+# auch Bruchstücke wie „%s, +l),s.warn(“ oder Vorlagen wie „${e.importType}“
+MODULE_NAME_RE = re.compile(r"^(?:@[\w.-]+/)?[\w.:-]+(?:/[\w.@-]+)*$|^\.{1,2}(?:/[\w.@-]+)+$")
+
 IMPORT_PATTERNS = {
     "javascript": re.compile(r"(?:require\(\s*['\"]([^'\"]+)|from\s+['\"]([^'\"]+)|import\s+['\"]([^'\"]+))"),
     "typescript": re.compile(r"(?:require\(\s*['\"]([^'\"]+)|from\s+['\"]([^'\"]+))"),
@@ -139,8 +143,8 @@ class SourceAnalyzer(Analyzer):
                 kv["Hinweis"] = f"Python-Syntaxfehler in Zeile {exc.lineno} – evtl. Python 2 oder beschädigt"
         else:
             if lang in IMPORT_PATTERNS:
-                imports = sorted({next(g for g in m.groups() if g) for m in IMPORT_PATTERNS[lang].finditer(text)
-                                  if any(m.groups())})
+                imports = sorted({name for m in IMPORT_PATTERNS[lang].finditer(text) if any(m.groups())
+                                  for name in [next(g for g in m.groups() if g)] if MODULE_NAME_RE.match(name)})
             if lang in OUTLINE_PATTERNS:
                 outline = [next(g for g in m.groups() if g) for m in OUTLINE_PATTERNS[lang].finditer(text)
                            if any(m.groups())]
